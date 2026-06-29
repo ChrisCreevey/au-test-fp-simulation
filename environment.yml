@@ -1,0 +1,28 @@
+name: au_test_sim
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Python and core
+  - python=3.11
+  - pip
+
+  # Phylogenetics and sequence analysis
+  - iqtree2>=2.2
+  - seq-gen>=1.3.4
+  - mafft>=7.520
+
+  # Utilities
+  - parallel::gnu-parallel>=20231122
+
+  # Optional but recommended
+  - git
+  - vim
+  - less
+
+variables:
+  IQTREE_BIN: iqtree2
+  SEQGEN_BIN: seq-gen
+  MAFFT_BIN: mafft
+  PYTHON_BIN: python
