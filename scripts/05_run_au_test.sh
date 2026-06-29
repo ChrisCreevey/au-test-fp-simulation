@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Step 5: Run AU test on each replicate
 # For each replicate, run AU test comparing constrained vs unconstrained trees
-# Input: rep_*/block1_unconstrained.treefile, rep_*/block1_constrained.treefile, etc.
-# Output: rep_*/au_test_block1.txt, rep_*/au_test_block2.txt (AU test results)
+# Input: rep_*/mixed_unconstrained.treefile, rep_*/mixed_constrained.treefile
+# Output: rep_*/au_test_result.txt (AU test results and p-values)
 
 # ============================================================================
 # Setup
@@ -96,25 +96,20 @@ log "Using Step 4 output from: $STEP4_OUTPUT_DIR"
 # Check Inputs
 # ============================================================================
 
-MODEL1=$(cat "${INPUT_DIR}/model_block1.txt" | tr -d '[:space:]')
-MODEL2=$(cat "${INPUT_DIR}/model_block2.txt" | tr -d '[:space:]')
-
-log "Models: Block 1: $MODEL1, Block 2: $MODEL2"
+MODEL=$(cat "${INPUT_DIR}/model_block1.txt" | tr -d '[:space:]')
+log "Using model: $MODEL"
 
 # ============================================================================
 # Process Each Replicate
 # ============================================================================
 
 rep_count=0
-au_reject_count1=0
-au_reject_count2=0
+au_reject_count=0
 
 for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
     rep_name=$(basename "$rep_dir")
-    rep_num=$(echo "$rep_name" | grep -oP '(?<=rep_)\d+')
 
-    if [[ -z "$rep_num" ]]; then
-        log "WARN: Could not parse replicate number from $rep_name, skipping"
+    if [[ ! -d "$rep_dir" ]]; then
         continue
     fi
 
@@ -130,79 +125,54 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
     # Get alignment and tree files
     # ====================================================================
 
-    ALN1=$(ls "$STEP3_OUTPUT_DIR"/*_block1.aln 2>/dev/null | sed -n "${rep_num}p")
-    ALN2=$(ls "$STEP3_OUTPUT_DIR"/*_block2.aln 2>/dev/null | sed -n "${rep_num}p")
+    MIXED_ALN=$(ls "$STEP3_OUTPUT_DIR"/${rep_name}_mixed.aln 2>/dev/null || echo "")
 
-    UNCONSTRAINED1="${rep_dir}/block1_unconstrained.treefile"
-    UNCONSTRAINED2="${rep_dir}/block2_unconstrained.treefile"
-    CONSTRAINED1="${rep_dir}/block1_constrained.treefile"
-    CONSTRAINED2="${rep_dir}/block2_constrained.treefile"
+    if [[ ! -f "$MIXED_ALN" ]]; then
+        log "WARN: Mixed alignment not found for $rep_name, skipping"
+        continue
+    fi
 
-    if [[ ! -f "$ALN1" ]] || [[ ! -f "$UNCONSTRAINED1" ]] || [[ ! -f "$CONSTRAINED1" ]]; then
-        log "WARN: Missing files for replicate $rep_num, skipping"
+    UNCONSTRAINED="${rep_dir}/mixed_unconstrained.treefile"
+    CONSTRAINED="${rep_dir}/mixed_constrained.treefile"
+
+    if [[ ! -f "$UNCONSTRAINED" ]] || [[ ! -f "$CONSTRAINED" ]]; then
+        log "WARN: Missing tree files for $rep_name, skipping"
         continue
     fi
 
     # ====================================================================
-    # Block 1 AU Test
+    # Run AU Test
     # ====================================================================
 
-    AU_OUT1="${REP_OUTPUT_DIR}/au_test_block1"
+    AU_OUT="${REP_OUTPUT_DIR}/au_test_result"
 
-    if [[ ! -f "${AU_OUT1}.txt" || "$FORCE_RERUN" == "true" ]]; then
+    if [[ ! -f "${AU_OUT}.txt" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
-            -s "$ALN1" \
-            -m "$MODEL1" \
-            -z "$CONSTRAINED1" \
-            -te "$UNCONSTRAINED1" \
+            -s "$MIXED_ALN" \
+            -m "$MODEL" \
+            -z "$CONSTRAINED" \
+            -te "$UNCONSTRAINED" \
             -au \
             -redo \
-            -prefix "$AU_OUT1" \
+            -prefix "$AU_OUT" \
             >> "$LOG" 2>&1
     fi
 
-    # Extract AU test p-value for block 1
-    if [[ -f "${AU_OUT1}.txt" ]]; then
-        au_pval1=$(grep -oP "AU\s+\K[0-9.]+" "${AU_OUT1}.txt" | head -1 || echo "NA")
+    # Extract AU test p-value
+    if [[ -f "${AU_OUT}.txt" ]]; then
+        au_pval=$(grep -oP "AU\s+\K[0-9.]+" "${AU_OUT}.txt" | head -1 || echo "NA")
 
-        if [[ "$au_pval1" != "NA" && $(echo "$au_pval1 < 0.05" | bc) -eq 1 ]]; then
-            ((au_reject_count1++))
-        fi
-    fi
-
-    # ====================================================================
-    # Block 2 AU Test
-    # ====================================================================
-
-    if [[ -f "$ALN2" ]]; then
-        AU_OUT2="${REP_OUTPUT_DIR}/au_test_block2"
-
-        if [[ ! -f "${AU_OUT2}.txt" || "$FORCE_RERUN" == "true" ]]; then
-            $IQTREE_BIN \
-                -s "$ALN2" \
-                -m "$MODEL2" \
-                -z "$CONSTRAINED2" \
-                -te "$UNCONSTRAINED2" \
-                -au \
-                -redo \
-                -prefix "$AU_OUT2" \
-                >> "$LOG" 2>&1
-        fi
-
-        # Extract AU test p-value for block 2
-        if [[ -f "${AU_OUT2}.txt" ]]; then
-            au_pval2=$(grep -oP "AU\s+\K[0-9.]+" "${AU_OUT2}.txt" | head -1 || echo "NA")
-
-            if [[ "$au_pval2" != "NA" && $(echo "$au_pval2 < 0.05" | bc) -eq 1 ]]; then
-                ((au_reject_count2++))
+        if [[ "$au_pval" != "NA" ]]; then
+            # Check if p-value < 0.05 (reject monophyly)
+            if (( $(echo "$au_pval < 0.05" | bc -l) )); then
+                ((au_reject_count++))
             fi
         fi
     fi
 done
 
 log "Processed $rep_count replicates for AU testing"
-log "Block 1 AU rejections (p < 0.05): $au_reject_count1 / $rep_count"
-log "Block 2 AU rejections (p < 0.05): $au_reject_count2 / $rep_count"
+log "AU test rejections (p < 0.05): $au_reject_count / $rep_count"
 
 # ============================================================================
 # Calculate and Save Summary
@@ -211,23 +181,21 @@ log "Block 2 AU rejections (p < 0.05): $au_reject_count2 / $rep_count"
 SUMMARY_FILE="${OUTPUT_DIR}/au_test_summary.txt"
 
 {
-    echo "AU Test Summary"
-    echo "==============="
+    echo "AU Test Summary (Mixed Alignment)"
+    echo "=================================="
     echo "Total replicates: $rep_count"
-    echo ""
-    echo "Block 1:"
-    echo "  AU test rejections (p < 0.05): $au_reject_count1"
+    echo "AU test rejections (p < 0.05): $au_reject_count"
+
     if [[ $rep_count -gt 0 ]]; then
-        fp_rate1=$(echo "scale=4; 100 * $au_reject_count1 / $rep_count" | bc)
-        echo "  False positive rate: ${fp_rate1}%"
+        fp_rate=$(echo "scale=4; 100 * $au_reject_count / $rep_count" | bc)
+        echo "False positive rate: ${fp_rate}%"
     fi
+
     echo ""
-    echo "Block 2:"
-    echo "  AU test rejections (p < 0.05): $au_reject_count2"
-    if [[ $rep_count -gt 0 ]]; then
-        fp_rate2=$(echo "scale=4; 100 * $au_reject_count2 / $rep_count" | bc)
-        echo "  False positive rate: ${fp_rate2}%"
-    fi
+    echo "Interpretation:"
+    echo "  If FP rate ~5%: AU test is correctly calibrated (alpha=0.05)"
+    echo "  If FP rate << 5%: AU test is conservative"
+    echo "  If FP rate >> 5%: AU test may be liberal"
 } > "$SUMMARY_FILE"
 
 log "Summary written to: $SUMMARY_FILE"

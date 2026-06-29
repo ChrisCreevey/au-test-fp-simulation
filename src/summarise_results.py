@@ -9,8 +9,6 @@ import argparse
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List
-from collections import defaultdict
 
 
 def extract_au_pvalue(au_text_file: str) -> float:
@@ -38,20 +36,16 @@ def summarize_per_rhg(
     step5_output_dir: Path,
     rhg_id: str,
     output_dir: Path
-) -> Dict:
+) -> dict:
     """
     Summarize results for one RHG across all replicates.
-    Returns dict with false positive rates and bootstrap support.
+    Returns dict with false positive rates.
     """
 
     results = {
         'rhg_id': rhg_id,
-        'block1_au_rejects': 0,
-        'block2_au_rejects': 0,
-        'block1_total': 0,
-        'block2_total': 0,
-        'block1_bootstrap_support': [],
-        'block2_bootstrap_support': [],
+        'au_rejects': 0,
+        'total': 0,
     }
 
     # Find all replicate directories
@@ -63,92 +57,52 @@ def summarize_per_rhg(
         rep_name = rep_dir.name
 
         # ====================================================================
-        # Block 1 AU Test
+        # Mixed Alignment AU Test
         # ====================================================================
 
-        au_file1 = rep_dir / 'au_test_block1.txt'
-        if au_file1.exists():
-            au_pval1 = extract_au_pvalue(str(au_file1))
+        au_file = rep_dir / 'au_test_result.txt'
+        if au_file.exists():
+            au_pval = extract_au_pvalue(str(au_file))
 
-            if au_pval1 is not None:
-                results['block1_total'] += 1
+            if au_pval is not None:
+                results['total'] += 1
 
                 # AU test rejects monophyly if p < 0.05
-                if au_pval1 < 0.05:
-                    results['block1_au_rejects'] += 1
-                    logging.debug(f"{rep_name} block1: AU rejected (p={au_pval1:.4f})")
+                if au_pval < 0.05:
+                    results['au_rejects'] += 1
+                    logging.debug(f"{rep_name}: AU rejected (p={au_pval:.4f})")
                 else:
-                    logging.debug(f"{rep_name} block1: AU accepted (p={au_pval1:.4f})")
-
-        # ====================================================================
-        # Block 2 AU Test
-        # ====================================================================
-
-        au_file2 = rep_dir / 'au_test_block2.txt'
-        if au_file2.exists():
-            au_pval2 = extract_au_pvalue(str(au_file2))
-
-            if au_pval2 is not None:
-                results['block2_total'] += 1
-
-                if au_pval2 < 0.05:
-                    results['block2_au_rejects'] += 1
-                    logging.debug(f"{rep_name} block2: AU rejected (p={au_pval2:.4f})")
-                else:
-                    logging.debug(f"{rep_name} block2: AU accepted (p={au_pval2:.4f})")
+                    logging.debug(f"{rep_name}: AU accepted (p={au_pval:.4f})")
 
     # ========================================================================
-    # Calculate False Positive Rates
+    # Calculate False Positive Rate
     # ========================================================================
 
-    results['block1_fp_rate'] = (
-        100.0 * results['block1_au_rejects'] / results['block1_total']
-        if results['block1_total'] > 0 else None
-    )
-
-    results['block2_fp_rate'] = (
-        100.0 * results['block2_au_rejects'] / results['block2_total']
-        if results['block2_total'] > 0 else None
+    results['fp_rate'] = (
+        100.0 * results['au_rejects'] / results['total']
+        if results['total'] > 0 else None
     )
 
     return results
 
 
-def write_results_tsv(results: Dict, output_file: Path) -> None:
+def write_results_tsv(results: dict, output_file: Path) -> None:
     """Write results to TSV file."""
 
     with open(output_file, 'w') as f:
         # Header
-        f.write("RHG_ID\tBlock\tFP_Rate_%\tAU_Rejects\tTotal_Replicates\n")
+        f.write("RHG_ID\tFP_Rate_%\tAU_Rejects\tTotal_Replicates\n")
 
-        # Block 1 results
-        if results['block1_total'] > 0:
-            fp_rate = results['block1_fp_rate'] or 0
+        # Results
+        if results['total'] > 0:
+            fp_rate = results['fp_rate'] or 0
             f.write(
-                f"{results['rhg_id']}\tBlock1\t{fp_rate:.2f}\t"
-                f"{results['block1_au_rejects']}\t{results['block1_total']}\n"
-            )
-
-        # Block 2 results
-        if results['block2_total'] > 0:
-            fp_rate = results['block2_fp_rate'] or 0
-            f.write(
-                f"{results['rhg_id']}\tBlock2\t{fp_rate:.2f}\t"
-                f"{results['block2_au_rejects']}\t{results['block2_total']}\n"
-            )
-
-        # Combined (if both blocks present)
-        if results['block1_total'] > 0 and results['block2_total'] > 0:
-            total_rejects = results['block1_au_rejects'] + results['block2_au_rejects']
-            total_reps = results['block1_total'] + results['block2_total']
-            combined_rate = 100.0 * total_rejects / total_reps
-            f.write(
-                f"{results['rhg_id']}\tCombined\t{combined_rate:.2f}\t"
-                f"{total_rejects}\t{total_reps}\n"
+                f"{results['rhg_id']}\t{fp_rate:.2f}\t"
+                f"{results['au_rejects']}\t{results['total']}\n"
             )
 
 
-def write_summary(results: Dict, output_file: Path) -> None:
+def write_summary(results: dict, output_file: Path) -> None:
     """Write human-readable summary."""
 
     with open(output_file, 'w') as f:
@@ -156,39 +110,24 @@ def write_summary(results: Dict, output_file: Path) -> None:
         f.write(f"AU Test False Positive Rate Summary: {results['rhg_id']}\n")
         f.write("=" * 70 + "\n\n")
 
-        # Block 1
-        if results['block1_total'] > 0:
-            fp_rate = results['block1_fp_rate'] or 0
-            f.write(f"Block 1:\n")
-            f.write(f"  Total replicates: {results['block1_total']}\n")
-            f.write(f"  AU test rejections (p < 0.05): {results['block1_au_rejects']}\n")
-            f.write(f"  False positive rate: {fp_rate:.2f}%\n\n")
+        if results['total'] > 0:
+            fp_rate = results['fp_rate'] or 0
+            f.write(f"Total replicates: {results['total']}\n")
+            f.write(f"AU test rejections (p < 0.05): {results['au_rejects']}\n")
+            f.write(f"False positive rate: {fp_rate:.2f}%\n\n")
 
-        # Block 2
-        if results['block2_total'] > 0:
-            fp_rate = results['block2_fp_rate'] or 0
-            f.write(f"Block 2:\n")
-            f.write(f"  Total replicates: {results['block2_total']}\n")
-            f.write(f"  AU test rejections (p < 0.05): {results['block2_au_rejects']}\n")
-            f.write(f"  False positive rate: {fp_rate:.2f}%\n\n")
-
-        # Combined
-        if results['block1_total'] > 0 and results['block2_total'] > 0:
-            total_rejects = results['block1_au_rejects'] + results['block2_au_rejects']
-            total_reps = results['block1_total'] + results['block2_total']
-            combined_rate = 100.0 * total_rejects / total_reps
-            f.write(f"Combined (Block 1 + Block 2):\n")
-            f.write(f"  Total replicates: {total_reps}\n")
-            f.write(f"  Total AU rejections: {total_rejects}\n")
-            f.write(f"  Combined false positive rate: {combined_rate:.2f}%\n\n")
-
-        f.write("=" * 70 + "\n")
-        f.write("Interpretation:\n")
-        f.write("  Under a null model of single-origin gene fusion, the AU test\n")
-        f.write("  should reject monophyly approximately 5% of the time due to\n")
-        f.write("  stochastic variation. Rates substantially higher than 5%\n")
-        f.write("  suggest true signal of polyphyly in the real data.\n")
-        f.write("=" * 70 + "\n")
+            f.write("=" * 70 + "\n")
+            f.write("Interpretation:\n")
+            f.write("  Under null model of single-origin fusion, the AU test\n")
+            f.write("  should reject monophyly approximately 5% of the time (α=0.05).\n")
+            f.write("  \n")
+            if fp_rate < 2:
+                f.write("  → Conservative: AU test rarely rejects monophyly\n")
+            elif fp_rate < 7:
+                f.write("  → Well-calibrated: AU test behaves as expected\n")
+            else:
+                f.write("  → Liberal: AU test may reject monophyly too often\n")
+            f.write("=" * 70 + "\n")
 
 
 def main():
@@ -250,10 +189,8 @@ def main():
     logging.info(f"  - {summary_file}")
 
     logging.info("")
-    if results['block1_total'] > 0:
-        logging.info(f"Block 1 FP rate: {results['block1_fp_rate']:.2f}%")
-    if results['block2_total'] > 0:
-        logging.info(f"Block 2 FP rate: {results['block2_fp_rate']:.2f}%")
+    if results['total'] > 0:
+        logging.info(f"False positive rate: {results['fp_rate']:.2f}%")
 
     sys.exit(0)
 

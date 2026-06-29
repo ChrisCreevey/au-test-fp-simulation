@@ -17,7 +17,7 @@ This directory contains template files showing the required format for input dat
 - **Format**: Newick tree format with branch lengths
 - **Content**: Monophyletic species tree where fusion clade is constrained to be monophyletic
 - **Requirements**:
-  - Taxon names must exactly match alignment and fusion_taxa.txt
+  - Taxon names must exactly match alignment and presence_absence.txt
   - All taxa must be present in the tree
   - Should include branch lengths (will be re-estimated in Step 1)
 
@@ -30,13 +30,19 @@ This directory contains template files showing the required format for input dat
   - `JC` (Jukes-Cantor, no parameters)
   - `TVM+G4` (TVM with gamma)
 
-### `fusion_taxa.txt`
-- **Format**: Plain text, one taxon name per line
-- **Content**: List of taxa that carry the fused gene
+### `presence_absence.txt`
+- **Format**: Tab-separated text with header
+- **Content**: Gene type for each taxon
+- **Valid gene types**:
+  - `Parent_gene_1` — only the first component gene
+  - `Parent_gene_2` — only the second component gene
+  - `fused` — both components concatenated
+  - `absent` — not present in this gene family
 - **Requirements**:
+  - First line: header `species	gene_type`
   - Taxon names must exactly match those in alignments
-  - At least one fusion and one non-fusion taxon required
-  - No empty lines or extra whitespace
+  - At least one `fused` taxon required
+  - At least one `Parent_gene_1` or `Parent_gene_2` taxon required (non-fused)
 
 ## Preparing Your Data
 
@@ -72,14 +78,14 @@ inputs/
 │   ├── constrained.nwk
 │   ├── model_block1.txt
 │   ├── model_block2.txt
-│   └── fusion_taxa.txt
+│   └── presence_absence.txt
 ├── RHG_001/
 │   ├── block1.aln
 │   ├── block2.aln
 │   ├── constrained.nwk
 │   ├── model_block1.txt
 │   ├── model_block2.txt
-│   └── fusion_taxa.txt
+│   └── presence_absence.txt
 ├── RHG_002/
 │   ├── (same 6 files)
 ├── RHG_003/

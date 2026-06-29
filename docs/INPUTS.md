@@ -12,14 +12,14 @@ inputs/
 │   ├── constrained.nwk
 │   ├── model_block1.txt
 │   ├── model_block2.txt
-│   └── fusion_taxa.txt
+│   └── presence_absence.txt
 ├── RHG_002/
 │   ├── block1.aln
 │   ├── block2.aln
 │   ├── constrained.nwk
 │   ├── model_block1.txt
 │   ├── model_block2.txt
-│   └── fusion_taxa.txt
+│   └── presence_absence.txt
 ├── RHG_003/
 │   └── [same structure]
 └── template/
@@ -95,24 +95,35 @@ K80+G
 - If model includes gamma rate variation (`+G`), the alpha value will be extracted from Step 1 output
 - If model includes invariant sites (`+I`), this must be preserved in the model string
 
-### 4. `fusion_taxa.txt`
+### 4. `presence_absence.txt`
 
-**Content:** List of taxa that carry the fused gene (one per line)
+**Content:** Gene presence/absence matrix for each taxon (which copy of the gene they carry)
 
-**Format:** Plain text, one taxon name per line
+**Format:** Tab-separated, two columns: `species` and `gene_type`
 
 **Example:**
 ```
-species_C_fused
-species_D_fused
-species_E_fused
+species	gene_type
+species_A	Parent_gene_1
+species_B	Parent_gene_2
+species_C_fused	fused
+species_D_fused	fused
+species_E	Parent_gene_1
+species_F	absent
 ```
+
+**Valid gene_type values:**
+- `Parent_gene_1` — Taxon carries only the first component gene
+- `Parent_gene_2` — Taxon carries only the second component gene
+- `fused` — Taxon carries both components concatenated (fusion)
+- `absent` — Taxon is absent from this gene family
 
 **Notes:**
 - Taxon names must match exactly those in the alignments and tree
-- No comments or extra whitespace
-- This defines which taxa will be **masked** in Step 3 (concatenated blocks)
-- All other taxa in the alignment are treated as non-fusion (separate blocks)
+- First line is a header (species, gene_type)
+- Tab-separated (not spaces)
+- This determines how each taxon is represented in Step 3 (masking)
+- All taxa in the tree/alignments should be represented in this file
 
 ## Preparing Input Data from Real Analysis
 
@@ -145,11 +156,24 @@ python3 scripts/create_constrained_tree.py \
 
 ### From RHG Presence/Absence Matrix
 ```bash
-# Extract taxa with the fused gene for RHG_001:
-python3 scripts/extract_fusion_taxa.py \
-  --rhg_presence_matrix rhg_matrix.tsv \
-  --rhg_id RHG_001 \
-  --output inputs/RHG_001/fusion_taxa.txt
+# Create presence/absence file from your RHG matrix
+# If you have a matrix showing which parent genes and fusions each species has:
+python3 << 'EOF'
+import pandas as pd
+
+# Load your RHG presence/absence matrix
+# Expected format: rows=species, columns=RHGs, values=Parent_gene_1/Parent_gene_2/fused/absent
+rhg_matrix = pd.read_csv('your_rhg_matrix.tsv', sep='\t', index_col=0)
+
+# Extract gene types for RHG_001
+rhg_001 = rhg_matrix['RHG_001']
+
+# Write to presence/absence file
+with open('inputs/RHG_001/presence_absence.txt', 'w') as f:
+    f.write('species\tgene_type\n')
+    for species, gene_type in rhg_001.items():
+        f.write(f'{species}\t{gene_type}\n')
+EOF
 ```
 
 ## Validation

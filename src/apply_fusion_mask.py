@@ -2,18 +2,21 @@
 """
 Apply single-origin fusion masking pattern to simulated sequences.
 
-For each replicate:
-  - Fusion clade taxa: concatenate block1 + block2 sequences into one "fused" sequence
-  - Non-fusion taxa: keep block1 and block2 as separate sequences
+Creates a SINGLE mixed alignment per replicate where:
+  - Fused taxa: concatenated block1 + block2 sequences
+  - Parent_gene_1 taxa: only block1 sequence
+  - Parent_gene_2 taxa: only block2 sequence
+  - Absent taxa: not included
 
-This creates the null model where the fusion has a single origin.
+This reflects the real data structure where different species carry
+different versions of the gene(s).
 """
 
 import sys
 import argparse
 import logging
 from pathlib import Path
-from typing import Dict, Set, List, Tuple
+from typing import Dict, Set
 
 
 def read_phylip_seqgen(filename: str) -> Dict[int, Dict[str, str]]:
@@ -74,6 +77,39 @@ def read_phylip_seqgen(filename: str) -> Dict[int, Dict[str, str]]:
     return replicates if replicates else None
 
 
+def read_presence_absence(filename: str) -> Dict[str, str]:
+    """
+    Read presence/absence matrix.
+    Returns: {taxon: gene_type} where gene_type is one of:
+      - Parent_gene_1, Parent_gene_2, fused, absent
+    """
+    pa_dict = {}
+
+    try:
+        with open(filename, 'r') as f:
+            lines = f.readlines()
+
+        # Skip header
+        for line in lines[1:]:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            parts = line.split('\t')
+            if len(parts) != 2:
+                logging.warning(f"Skipping malformed line: {line}")
+                continue
+
+            taxon, gene_type = parts[0].strip(), parts[1].strip()
+            pa_dict[taxon] = gene_type
+
+    except Exception as e:
+        logging.error(f"Error reading presence/absence file {filename}: {e}")
+        return None
+
+    return pa_dict
+
+
 def write_fasta(sequences: Dict[str, str], output_file: str) -> None:
     """Write sequences in FASTA format."""
     with open(output_file, 'w') as f:
@@ -87,48 +123,49 @@ def write_fasta(sequences: Dict[str, str], output_file: str) -> None:
 def apply_fusion_mask(
     block1_seqs: Dict[str, str],
     block2_seqs: Dict[str, str],
-    fusion_taxa: Set[str],
+    presence_absence: Dict[str, str],
     rep_num: int,
     output_dir: Path
-) -> Tuple[bool, str]:
+) -> tuple:
     """
     Apply masking for one replicate.
+    Creates a single mixed alignment based on presence/absence.
     Returns (success, message)
     """
 
     try:
-        output_block1 = output_dir / f"rep_{rep_num:03d}_block1.aln"
-        output_block2 = output_dir / f"rep_{rep_num:03d}_block2.aln"
+        output_mixed = output_dir / f"rep_{rep_num:03d}_mixed.aln"
 
-        # For fusion clade: create concatenated "fused" sequence
-        # For non-fusion: keep separate
-        masked_block1 = {}
-        masked_block2 = {}
+        # Create mixed alignment
+        mixed_alignment = {}
 
-        all_taxa = set(block1_seqs.keys())
+        for taxon, gene_type in presence_absence.items():
+            if gene_type == 'absent':
+                # Don't include absent taxa
+                continue
+            elif gene_type == 'fused':
+                # Concatenate both blocks
+                seq1 = block1_seqs.get(taxon, '')
+                seq2 = block2_seqs.get(taxon, '')
+                if seq1 and seq2:
+                    mixed_alignment[taxon] = seq1 + seq2
+            elif gene_type == 'Parent_gene_1':
+                # Use only block1
+                seq1 = block1_seqs.get(taxon, '')
+                if seq1:
+                    mixed_alignment[taxon] = seq1
+            elif gene_type == 'Parent_gene_2':
+                # Use only block2
+                seq2 = block2_seqs.get(taxon, '')
+                if seq2:
+                    mixed_alignment[taxon] = seq2
 
-        for taxon in all_taxa:
-            seq1 = block1_seqs.get(taxon, '')
-            seq2 = block2_seqs.get(taxon, '')
-
-            if taxon in fusion_taxa:
-                # This taxon carries the fusion
-                # Concatenate into block1, leave block2 empty
-                masked_block1[taxon] = seq1 + seq2
-                # Don't include in block2 (or use placeholder)
-            else:
-                # Non-fusion taxon: keep blocks separate
-                masked_block1[taxon] = seq1
-                masked_block2[taxon] = seq2
-
-        # Only write block1 if there are sequences
-        if masked_block1:
-            write_fasta(masked_block1, str(output_block1))
-
-        if masked_block2:
-            write_fasta(masked_block2, str(output_block2))
-
-        return True, f"rep_{rep_num:03d} masked successfully"
+        # Write mixed alignment
+        if mixed_alignment:
+            write_fasta(mixed_alignment, str(output_mixed))
+            return True, f"rep_{rep_num:03d} masked successfully ({len(mixed_alignment)} taxa)"
+        else:
+            return False, f"rep_{rep_num:03d} produced empty alignment"
 
     except Exception as e:
         return False, f"rep_{rep_num:03d} failed: {str(e)}"
@@ -142,8 +179,8 @@ def main():
                         help='SeqGen simulated block 1 sequences')
     parser.add_argument('--sim-block2', required=True,
                         help='SeqGen simulated block 2 sequences')
-    parser.add_argument('--fusion-taxa-file', required=True,
-                        help='File with fusion clade taxa (one per line)')
+    parser.add_argument('--presence-absence-file', required=True,
+                        help='File with gene presence/absence per taxon')
     parser.add_argument('--output-dir', required=True,
                         help='Output directory for masked alignments')
     parser.add_argument('--n-replicates', type=int, default=100,
@@ -170,23 +207,25 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ========================================================================
-    # Load Fusion Taxa
+    # Load Presence/Absence Matrix
     # ========================================================================
 
-    logging.info("Reading fusion taxa...")
+    logging.info("Reading presence/absence matrix...")
 
-    fusion_taxa = set()
-    try:
-        with open(args.fusion_taxa_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    fusion_taxa.add(line)
-    except Exception as e:
-        logging.error(f"Failed to read fusion taxa: {e}")
+    presence_absence = read_presence_absence(args.presence_absence_file)
+
+    if not presence_absence:
+        logging.error("Failed to read presence/absence file")
         sys.exit(1)
 
-    logging.info(f"Fusion taxa (n={len(fusion_taxa)}): {', '.join(sorted(fusion_taxa)[:5])}...")
+    fused_count = sum(1 for gt in presence_absence.values() if gt == 'fused')
+    parent1_count = sum(1 for gt in presence_absence.values() if gt == 'Parent_gene_1')
+    parent2_count = sum(1 for gt in presence_absence.values() if gt == 'Parent_gene_2')
+
+    logging.info(f"Presence/absence matrix loaded:")
+    logging.info(f"  Fused taxa: {fused_count}")
+    logging.info(f"  Parent_gene_1 only: {parent1_count}")
+    logging.info(f"  Parent_gene_2 only: {parent2_count}")
 
     # ========================================================================
     # Load SeqGen Output
@@ -229,7 +268,7 @@ def main():
         success, message = apply_fusion_mask(
             block1_seqs,
             block2_seqs,
-            fusion_taxa,
+            presence_absence,
             rep_idx + 1,  # Use 1-indexed numbering for output files
             output_dir
         )
@@ -249,6 +288,7 @@ def main():
     logging.info(f"Masking Complete")
     logging.info(f"  Success: {success_count} / {n_reps}")
     logging.info(f"  Failed: {fail_count} / {n_reps}")
+    logging.info(f"  Output files: rep_NNN_mixed.aln")
 
     if fail_count > 0:
         sys.exit(1)

@@ -164,7 +164,7 @@ def main():
         'constrained.nwk',
         'model_block1.txt',
         'model_block2.txt',
-        'fusion_taxa.txt'
+        'presence_absence.txt'
     ]
 
     for fname in required_files:
@@ -247,21 +247,69 @@ def main():
         print(f"✓ model_block2.txt: {model2}")
 
     # ========================================================================
-    # Validate Fusion Taxa
+    # Validate Presence/Absence File
     # ========================================================================
 
-    print("\nValidating fusion taxa...")
+    print("\nValidating presence/absence matrix...")
 
-    with open(input_dir / 'fusion_taxa.txt', 'r') as f:
-        fusion_taxa = set(
-            line.strip()
-            for line in f
-            if line.strip() and not line.startswith('#')
-        )
+    pa_file = input_dir / 'presence_absence.txt'
+    presence_absence = {}
+    fused_taxa = set()
+    parent1_taxa = set()
+    parent2_taxa = set()
+    absent_taxa = set()
 
-    print(f"✓ fusion_taxa.txt: {len(fusion_taxa)} taxa")
-    for taxon in sorted(fusion_taxa):
-        print(f"    - {taxon}")
+    try:
+        with open(pa_file, 'r') as f:
+            lines = f.readlines()
+
+        # Skip header
+        for line in lines[1:]:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            parts = line.split('\t')
+            if len(parts) != 2:
+                warnings.append(f"Malformed line in presence_absence.txt: {line}")
+                continue
+
+            taxon, gene_type = parts[0].strip(), parts[1].strip()
+            presence_absence[taxon] = gene_type
+
+            if gene_type == 'fused':
+                fused_taxa.add(taxon)
+            elif gene_type == 'Parent_gene_1':
+                parent1_taxa.add(taxon)
+            elif gene_type == 'Parent_gene_2':
+                parent2_taxa.add(taxon)
+            elif gene_type == 'absent':
+                absent_taxa.add(taxon)
+            else:
+                warnings.append(f"Unknown gene_type '{gene_type}' for {taxon}")
+
+    except Exception as e:
+        errors.append(f"Error reading presence_absence.txt: {e}")
+
+    if not errors:
+        print(f"✓ presence_absence.txt: {len(presence_absence)} taxa")
+        print(f"    Fused: {len(fused_taxa)}")
+        print(f"    Parent_gene_1 only: {len(parent1_taxa)}")
+        print(f"    Parent_gene_2 only: {len(parent2_taxa)}")
+        print(f"    Absent: {len(absent_taxa)}")
+
+        # Check that there is at least one fused taxon
+        if not fused_taxa:
+            errors.append("No fused taxa found in presence_absence.txt")
+        else:
+            print(f"  Fused taxa: {', '.join(sorted(fused_taxa)[:3])}...")
+
+        # Check that there is at least one non-fused taxon
+        non_fused = parent1_taxa | parent2_taxa
+        if not non_fused:
+            errors.append("No non-fused taxa found (need at least one for comparison)")
+        else:
+            print(f"  Non-fused taxa: {len(non_fused)}")
 
     # ========================================================================
     # Cross-Validation: Taxon Name Consistency
@@ -271,30 +319,34 @@ def main():
 
     aln1_taxa = set(aln1.keys())
     aln2_taxa = set(aln2.keys())
+    pa_taxa = set(presence_absence.keys())
 
     if aln1_taxa != aln2_taxa:
         warnings.append("Taxon sets differ between block1 and block2")
         print(f"  block1 only: {aln1_taxa - aln2_taxa}")
         print(f"  block2 only: {aln2_taxa - aln1_taxa}")
 
-    if tree_taxa and tree_taxa != aln1_taxa:
-        warnings.append("Tree taxa don't match alignment taxa")
-        print(f"  tree only: {tree_taxa - aln1_taxa}")
-        print(f"  aln only: {aln1_taxa - tree_taxa}")
+    if tree_taxa:
+        # Tree should have all non-absent taxa
+        expected_tree_taxa = aln1_taxa
+        if tree_taxa != expected_tree_taxa:
+            warnings.append("Tree taxa don't match alignment taxa")
+            print(f"  tree only: {tree_taxa - expected_tree_taxa}")
+            print(f"  aln only: {expected_tree_taxa - tree_taxa}")
 
-    # Check fusion taxa exist in alignments
-    missing_fusion_taxa = fusion_taxa - aln1_taxa
-    if missing_fusion_taxa:
-        errors.append(f"Fusion taxa not in alignments: {missing_fusion_taxa}")
+    # Check that presence_absence taxa cover alignments
+    missing_pa = aln1_taxa - pa_taxa
+    if missing_pa:
+        errors.append(f"Taxa in alignments but not in presence_absence.txt: {missing_pa}")
     else:
-        print("✓ All fusion taxa found in alignments")
+        print("✓ All alignment taxa found in presence_absence.txt")
 
-    # Check that there are both fusion and non-fusion taxa
-    non_fusion = aln1_taxa - fusion_taxa
-    if not non_fusion:
-        errors.append("No non-fusion taxa found (need at least one for comparison)")
-    else:
-        print(f"✓ Non-fusion taxa count: {len(non_fusion)}")
+    # Check that fused taxa are correctly marked
+    for taxon in fused_taxa:
+        if taxon not in aln1_taxa:
+            warnings.append(f"Fused taxon '{taxon}' not in alignment")
+        else:
+            print(f"  ✓ Fused taxon '{taxon}' found in alignment")
 
     # ========================================================================
     # Report Results

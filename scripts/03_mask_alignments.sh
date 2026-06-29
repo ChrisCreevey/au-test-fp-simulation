@@ -91,30 +91,18 @@ log "Using Step 2 output from: $STEP2_OUTPUT_DIR"
 # Check Inputs
 # ============================================================================
 
-FUSION_TAXA_FILE="${INPUT_DIR}/fusion_taxa.txt"
+PA_FILE="${INPUT_DIR}/presence_absence.txt"
 SIM1="${STEP2_OUTPUT_DIR}/simulated_block1.phy"
 SIM2="${STEP2_OUTPUT_DIR}/simulated_block2.phy"
 
-for file in "$FUSION_TAXA_FILE" "$SIM1" "$SIM2"; do
+for file in "$PA_FILE" "$SIM1" "$SIM2"; do
     if [[ ! -f "$file" ]]; then
         log "ERROR: Required file not found: $file"
         exit 1
     fi
 done
 
-# Read fusion taxa into an array
-FUSION_TAXA=()
-while IFS= read -r taxon; do
-    # Skip empty lines and comments
-    if [[ -n "$taxon" && ! "$taxon" =~ ^# ]]; then
-        FUSION_TAXA+=("$taxon")
-    fi
-done < "$FUSION_TAXA_FILE"
-
-log "Fusion clade taxa (count: ${#FUSION_TAXA[@]}):"
-for taxon in "${FUSION_TAXA[@]}"; do
-    log "  - $taxon"
-done
+log "Presence/absence file: $PA_FILE"
 
 # ============================================================================
 # Call Python Masking Script
@@ -125,7 +113,7 @@ log "Running Python masking script..."
 "$PYTHON_BIN" "$SRC_DIR/apply_fusion_mask.py" \
     --sim-block1 "$SIM1" \
     --sim-block2 "$SIM2" \
-    --fusion-taxa-file "$FUSION_TAXA_FILE" \
+    --presence-absence-file "$PA_FILE" \
     --output-dir "$OUTPUT_DIR" \
     --n-replicates "$N_REPLICATES" \
     --log "$LOG"
@@ -141,10 +129,10 @@ fi
 
 log "Verifying output..."
 
-expected_files=$((N_REPLICATES * 2))  # 2 blocks per replicate
-actual_files=$(ls -1 "$OUTPUT_DIR"/rep_*_block*.aln 2>/dev/null | wc -l)
+expected_files=$N_REPLICATES  # 1 mixed alignment per replicate
+actual_files=$(ls -1 "$OUTPUT_DIR"/rep_*_mixed.aln 2>/dev/null | wc -l)
 
-log "Expected files: $expected_files"
+log "Expected files: $expected_files (1 mixed alignment per replicate)"
 log "Actual files: $actual_files"
 
 if [[ $actual_files -lt $expected_files ]]; then
@@ -153,7 +141,7 @@ fi
 
 if [[ $actual_files -gt 0 ]]; then
     log "SUCCESS: Step 3 completed"
-    log "Masked alignments ready for tree reconstruction in Step 4"
+    log "Mixed alignments (one per replicate) ready for tree reconstruction in Step 4"
 else
     log "ERROR: No output files created"
     exit 1

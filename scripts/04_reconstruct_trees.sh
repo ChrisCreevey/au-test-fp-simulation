@@ -3,10 +3,10 @@ set -euo pipefail
 
 # Step 4: Reconstruct gene trees for each simulated replicate
 # For each of 100 replicates:
-#   - Build unconstrained tree for block 1 and block 2
-#   - Build constrained tree forcing fusion sequences to be monophyletic
-# Input: rep_001_block1.aln, rep_001_block2.aln, ... (from Step 3)
-# Output: rep_*/block1_unconstrained.treefile, rep_*/block2_constrained.treefile, etc.
+#   - Build unconstrained tree from mixed alignment
+#   - Build constrained tree forcing fused sequences to be monophyletic
+# Input: rep_001_mixed.aln, rep_002_mixed.aln, ... (from Step 3)
+# Output: rep_*/mixed_unconstrained.treefile, rep_*/mixed_constrained.treefile
 
 # ============================================================================
 # Setup
@@ -100,31 +100,28 @@ if [[ ! -f "$CONSTRAINED_TREE" ]]; then
     exit 1
 fi
 
-log "Models: Block 1: $MODEL1, Block 2: $MODEL2"
+# For mixed alignments, use a combined model or take block1's model
+# (both blocks are present in the mixed alignment)
+COMBINED_MODEL="${MODEL1}"
+log "Using model: $COMBINED_MODEL"
 
 # ============================================================================
 # Process Each Replicate
 # ============================================================================
 
 rep_count=0
-total_reps=$(ls -1d "$STEP3_OUTPUT_DIR"/rep_* 2>/dev/null | wc -l)
+total_reps=$(ls -1 "$STEP3_OUTPUT_DIR"/rep_*_mixed.aln 2>/dev/null | wc -l)
 
 log "Found $total_reps replicates to process"
 
-for rep_dir in "$STEP3_OUTPUT_DIR"/rep_*; do
-    rep_name=$(basename "$rep_dir")
-    rep_num=$(echo "$rep_name" | grep -oP '(?<=rep_)\d+')
-
-    if [[ -z "$rep_num" ]]; then
-        # Handle different naming convention (might have just numbers)
-        rep_num=$(ls "$rep_dir"/*_block1.aln 2>/dev/null | head -1 | grep -oP '_block1' || echo "")
-        if [[ -z "$rep_num" ]]; then
-            log "WARN: Could not parse replicate number from $rep_dir, skipping"
-            continue
-        fi
+for mixed_aln in "$STEP3_OUTPUT_DIR"/rep_*_mixed.aln; do
+    if [[ ! -f "$mixed_aln" ]]; then
+        continue
     fi
 
+    rep_name=$(basename "$mixed_aln" _mixed.aln)
     ((rep_count++))
+
     if [[ $((rep_count % 10)) -eq 0 ]]; then
         log "Processing replicate $rep_count / $total_reps"
     fi
@@ -132,76 +129,47 @@ for rep_dir in "$STEP3_OUTPUT_DIR"/rep_*; do
     REP_OUTPUT_DIR="${OUTPUT_DIR}/${rep_name}"
     mkdir -p "$REP_OUTPUT_DIR"
 
-    # Locate alignment files from step 3
-    ALN1=$(ls "$STEP3_OUTPUT_DIR"/*_rep_${rep_num:(-3)}_block1.aln 2>/dev/null | head -1 || \
-           ls "$STEP3_OUTPUT_DIR"/rep_*${rep_num:(-3)}_block1.aln 2>/dev/null | head -1 || \
-           ls "$STEP3_OUTPUT_DIR"/rep_*/block1.aln 2>/dev/null | sed -n "${rep_num}p")
+    # ====================================================================
+    # Build Unconstrained Tree
+    # ====================================================================
 
-    if [[ -z "$ALN1" || ! -f "$ALN1" ]]; then
-        # Try alternative pattern
-        ALN1=$(ls "$STEP3_OUTPUT_DIR"/rep_*_block1.aln 2>/dev/null | sed -n "${rep_num}p")
-    fi
+    UNCONSTRAINED="${REP_OUTPUT_DIR}/mixed_unconstrained"
 
-    ALN2=$(echo "$ALN1" | sed 's/_block1/_block2/')
-
-    if [[ ! -f "$ALN1" ]] || [[ ! -f "$ALN2" ]]; then
-        log "ERROR: Could not find alignment files for replicate $rep_num"
-        log "  Looked for: $ALN1, $ALN2"
-        exit 1
-    fi
-
-    # ========================================================================
-    # Build Unconstrained Trees
-    # ========================================================================
-
-    UNCONSTRAINED1="${REP_OUTPUT_DIR}/block1_unconstrained"
-    if [[ ! -f "${UNCONSTRAINED1}.treefile" || "$FORCE_RERUN" == "true" ]]; then
+    if [[ ! -f "${UNCONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
-            -s "$ALN1" \
-            -m "$MODEL1" \
+            -s "$mixed_aln" \
+            -m "$COMBINED_MODEL" \
             -bb "$N_BOOTSTRAP" \
             -redo \
-            -prefix "$UNCONSTRAINED1" \
+            -prefix "$UNCONSTRAINED" \
             >> "$LOG" 2>&1
+
+        if [[ ! -f "${UNCONSTRAINED}.treefile" ]]; then
+            log "ERROR: IQTree failed for unconstrained tree of $rep_name"
+            exit 1
+        fi
     fi
 
-    UNCONSTRAINED2="${REP_OUTPUT_DIR}/block2_unconstrained"
-    if [[ ! -f "${UNCONSTRAINED2}.treefile" || "$FORCE_RERUN" == "true" ]]; then
-        $IQTREE_BIN \
-            -s "$ALN2" \
-            -m "$MODEL2" \
-            -bb "$N_BOOTSTRAP" \
-            -redo \
-            -prefix "$UNCONSTRAINED2" \
-            >> "$LOG" 2>&1
-    fi
+    # ====================================================================
+    # Build Constrained Tree
+    # ====================================================================
 
-    # ========================================================================
-    # Build Constrained Trees
-    # ========================================================================
+    CONSTRAINED="${REP_OUTPUT_DIR}/mixed_constrained"
 
-    CONSTRAINED1="${REP_OUTPUT_DIR}/block1_constrained"
-    if [[ ! -f "${CONSTRAINED1}.treefile" || "$FORCE_RERUN" == "true" ]]; then
+    if [[ ! -f "${CONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
-            -s "$ALN1" \
+            -s "$mixed_aln" \
             -te "$CONSTRAINED_TREE" \
-            -m "$MODEL1" \
+            -m "$COMBINED_MODEL" \
             -bb "$N_BOOTSTRAP" \
             -redo \
-            -prefix "$CONSTRAINED1" \
+            -prefix "$CONSTRAINED" \
             >> "$LOG" 2>&1
-    fi
 
-    CONSTRAINED2="${REP_OUTPUT_DIR}/block2_constrained"
-    if [[ ! -f "${CONSTRAINED2}.treefile" || "$FORCE_RERUN" == "true" ]]; then
-        $IQTREE_BIN \
-            -s "$ALN2" \
-            -te "$CONSTRAINED_TREE" \
-            -m "$MODEL2" \
-            -bb "$N_BOOTSTRAP" \
-            -redo \
-            -prefix "$CONSTRAINED2" \
-            >> "$LOG" 2>&1
+        if [[ ! -f "${CONSTRAINED}.treefile" ]]; then
+            log "ERROR: IQTree failed for constrained tree of $rep_name"
+            exit 1
+        fi
     fi
 done
 
