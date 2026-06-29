@@ -1,0 +1,33 @@
+# Generated files and directories
+outputs/
+logs/
+*.log
+
+# Input data (often large)
+inputs/RHG_*/
+!inputs/template/
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# Large binary files that shouldn't be committed
+*.phy
+*.treefile
+*.nwk.*
