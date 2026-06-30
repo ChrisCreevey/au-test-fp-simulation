@@ -90,6 +90,29 @@ MODEL=$(cat "$MODEL_FILE" | tr -d '[:space:]')
 log "Model: $MODEL"
 
 # ============================================================================
+# Check if Tree Already Has Branch Lengths
+# ============================================================================
+
+log "Checking if constrained tree already has branch lengths..."
+
+# Check if tree has colons followed by numbers (indicating branch lengths)
+if grep -q ":[0-9]" "$CONSTRAINED_TREE"; then
+    log "✓ Tree already has branch lengths"
+
+    if [[ "$FORCE_RERUN" != "true" ]]; then
+        log "Skipping Step 1 (using existing branch lengths from input tree)"
+        log "Copying tree to output for Step 2"
+        cp "$CONSTRAINED_TREE" "${OUTPUT_DIR}/combined_with_brlen.treefile"
+        log "SUCCESS: Step 1 skipped (branch lengths already present)"
+        exit 0
+    else
+        log "Force re-run flag set - will recalculate branch lengths anyway"
+    fi
+else
+    log "⚠ Tree does NOT have branch lengths - will estimate them"
+fi
+
+# ============================================================================
 # Estimate Branch Lengths
 # ============================================================================
 

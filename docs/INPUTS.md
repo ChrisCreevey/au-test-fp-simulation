@@ -60,17 +60,21 @@ ATGCGATCG----------CGTAGGCTAGGCT
 
 **Content:** Monophyletic species-level tree in Newick format
 
-**Format:** Newick with branch lengths optional but recommended
+**Format:** Newick, with or without branch lengths
 
-**Example:**
+**Examples:**
 ```
 (species_A:0.01,species_B:0.02,(species_C_fused:0.003,species_D_fused:0.005):0.015);
+(species_A,species_B,(species_C_fused,species_D_fused));
 ```
 
 **Notes:**
 - This is the **constrained** tree that enforces monophyly of the fused clade
 - Taxon names must match exactly those in combined.aln
-- Branch lengths will be re-estimated in Step 1
+- **Branch lengths are optional:**
+  - If tree **has** branch lengths: Step 1 will be skipped (uses them for SeqGen)
+  - If tree **lacks** branch lengths: Step 1 will estimate them using IQTree
+  - To force re-estimation: use `-f` flag when running pipeline
 - Can be derived from species tree with fused clade constrained to be monophyletic
 
 ### 3. `model.txt`

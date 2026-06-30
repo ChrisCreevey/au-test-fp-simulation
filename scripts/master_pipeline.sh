@@ -20,12 +20,17 @@ Required:
 
 Optional:
   -c <file>             Config file (default: config/pipeline.conf)
-  -f                    Force re-run (skip existing outputs)
+  -f                    Force re-run (recalculate all steps, including branch lengths)
   -h                    Show this help message
+
+Notes:
+  - If constrained tree already has branch lengths, Step 1 will be skipped
+  - Use -f to force re-estimation of branch lengths (overrides auto-detection)
+  - This is useful if you want to recalibrate based on the alignment
 
 Example:
   bash $0 -i inputs/RHG_001 -c config/pipeline.conf
-  bash $0 -i inputs/RHG_001 -f
+  bash $0 -i inputs/RHG_001 -f  (recalculate branch lengths + redo all steps)
 
 EOF
     exit 1
