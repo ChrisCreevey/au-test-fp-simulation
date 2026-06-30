@@ -133,7 +133,7 @@ for masked_aln in "$STEP3_OUTPUT_DIR"/rep_*_masked.aln; do
             -m "$MODEL" \
             -bb "$N_BOOTSTRAP" \
             -redo \
-            -prefix "$UNCONSTRAINED" \
+            --prefix "$UNCONSTRAINED" \
             >> "$LOG" 2>&1
 
         if [[ ! -f "${UNCONSTRAINED}.treefile" ]]; then
