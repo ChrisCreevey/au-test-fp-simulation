@@ -61,33 +61,44 @@ def remove_gaps(sequence: str) -> str:
     return sequence.replace('-', '')
 
 
-def apply_gap_pattern(ungapped_seq: str, gap_positions: List[int]) -> str:
+def apply_gap_pattern(ungapped_seq: str, gap_positions: List[int], aln_length: int) -> str:
     """
     Insert gaps into ungapped sequence at specified positions.
 
+    The ungapped_seq represents a full-length alignment sequence (may include gaps
+    from SeqGen that represent regions not present in this taxon). We extract only
+    the non-gap positions and reconstruct the sequence with the correct gap pattern.
+
     Args:
-        ungapped_seq: Sequence without gaps
-        gap_positions: List of indices where gaps should be inserted
+        ungapped_seq: Full-length sequence from SeqGen (same length as original alignment)
+        gap_positions: List of positions in original alignment that have gaps
+        aln_length: Length of the original alignment
 
     Returns:
-        Sequence with gaps inserted
+        Sequence with gaps inserted at the correct positions
     """
-    if not gap_positions:
-        return ungapped_seq
-
-    # Build result by iterating through original positions
-    result = []
-    ungapped_idx = 0
-    all_positions = set(range(len(ungapped_seq) + len(gap_positions)))
+    # Determine non-gap positions (positions that should have sequence)
+    non_gap_positions = [i for i in range(aln_length) if i not in gap_positions]
     gap_pos_set = set(gap_positions)
 
-    for pos in sorted(all_positions):
+    # Extract only the sequence from non-gap positions of the input
+    actual_seq = []
+    for i in range(len(ungapped_seq)):
+        if i < len(non_gap_positions):
+            # Use characters from ungapped_seq in order
+            actual_seq.append(ungapped_seq[i])
+
+    # Now reconstruct with proper gap pattern
+    result = []
+    seq_idx = 0
+
+    for pos in range(aln_length):
         if pos in gap_pos_set:
             result.append('-')
         else:
-            if ungapped_idx < len(ungapped_seq):
-                result.append(ungapped_seq[ungapped_idx])
-                ungapped_idx += 1
+            if seq_idx < len(actual_seq):
+                result.append(actual_seq[seq_idx])
+                seq_idx += 1
 
     return ''.join(result)
 
@@ -261,9 +272,10 @@ def main():
 
                 sim_seq = sim_seqs[taxon]
                 gap_pos = gap_patterns[taxon]
+                aln_len = len(list(original.values())[0])  # All sequences same length
 
                 # Apply original gap pattern to simulated sequence
-                masked_seq = apply_gap_pattern(sim_seq, gap_pos)
+                masked_seq = apply_gap_pattern(sim_seq, gap_pos, aln_len)
                 masked_seqs[taxon] = masked_seq
 
             # Write masked alignment
