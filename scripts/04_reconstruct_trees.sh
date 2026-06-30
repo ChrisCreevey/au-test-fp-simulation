@@ -155,7 +155,7 @@ for masked_aln in "$STEP3_OUTPUT_DIR"/rep_*_masked.aln; do
             -m "$MODEL" \
             -bb "$N_BOOTSTRAP" \
             -redo \
-            -prefix "$CONSTRAINED" \
+            --prefix "$CONSTRAINED" \
             >> "$LOG" 2>&1
 
         if [[ ! -f "${CONSTRAINED}.treefile" ]]; then
