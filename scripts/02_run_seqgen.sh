@@ -162,21 +162,42 @@ parse_model_for_seqgen() {
 }
 
 # ============================================================================
+# Calculate Consensus Sequence (Ancestral)
+# ============================================================================
+
+log "Calculating majority-rule consensus sequence from original alignment..."
+
+CONSENSUS_FILE="${OUTPUT_DIR}/consensus.phy"
+
+"$PYTHON_BIN" "$SRC_DIR/calculate_consensus.py" \
+    --alignment "$COMBINED_ALN" \
+    --output "$CONSENSUS_FILE"
+
+if [[ ! -f "$CONSENSUS_FILE" ]]; then
+    log "ERROR: Failed to calculate consensus"
+    exit 1
+fi
+
+log "Consensus sequence calculated for ancestral state"
+
+# ============================================================================
 # Run SeqGen
 # ============================================================================
 
 SIM_MODEL=$(parse_model_for_seqgen "$MODEL" "$TREE")
 
-log "SeqGen command: $SEQGEN_BIN $SIM_MODEL -l$ALN_LEN -n$N_REPLICATES"
+log "SeqGen command: $SEQGEN_BIN $SIM_MODEL -l$ALN_LEN -n$N_REPLICATES -s"
 
 OUTPUT_SIM="${OUTPUT_DIR}/simulated_combined.phy"
 
 if [[ -f "$OUTPUT_SIM" && "$FORCE_RERUN" != "true" ]]; then
     log "Simulated sequences already exist, skipping"
 else
-    log "Simulating sequences..."
+    log "Simulating sequences from consensus ancestral sequence..."
 
-    if cat "$TREE" | $SEQGEN_BIN $SIM_MODEL -l"$ALN_LEN" -n"$N_REPLICATES" > "$OUTPUT_SIM"; then
+    # SeqGen with -s flag reads sequences from input
+    # We provide: consensus sequence (as Phylip), then the tree
+    if (cat "$CONSENSUS_FILE" && cat "$TREE") | $SEQGEN_BIN $SIM_MODEL -n"$N_REPLICATES" -s > "$OUTPUT_SIM"; then
         log "Simulation completed: $OUTPUT_SIM"
     else
         log "ERROR: SeqGen failed"
