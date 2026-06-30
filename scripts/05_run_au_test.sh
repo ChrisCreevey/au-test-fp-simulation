@@ -173,7 +173,7 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
             -te "$UNCONSTRAINED" \
             -au \
             -redo \
-            -prefix "$AU_OUT" \
+            --prefix "$AU_OUT" \
             >> "$LOG" 2>&1
     fi
 
