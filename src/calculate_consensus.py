@@ -114,16 +114,15 @@ def main():
         print("ERROR: Consensus length doesn't match alignment", file=sys.stderr)
         sys.exit(1)
 
-    # Write consensus in SeqGen format (Phylip all taxa with consensus sequence)
-    # SeqGen's -k flag (use taxon as ancestral) works better with all taxa present
-    # All taxa get the consensus sequence; SeqGen will evolve from the first one
+    # Write consensus in SeqGen format (Phylip single sequence)
+    # Use -k1 flag to specify this sequence as ancestral
     with open(args.output, 'w') as f:
-        f.write(f"{len(seqs)} {len(consensus)}\n")
-        for taxon in sorted(seqs.keys()):
-            f.write(f"{taxon} {consensus}\n")
+        f.write(f"1 {len(consensus)}\n")
+        f.write(f"ANCESTRAL {consensus}\n")
 
     print(f"Consensus written to: {args.output}")
-    print(f"  Format: SeqGen Phylip ({len(seqs)} sequences, all identical consensus)")
+    print(f"  Format: SeqGen Phylip (1 sequence)")
+    print(f"  Use with: seq-gen ... -k1 ... (to use as ancestral)")
     print(f"  Sequence: {consensus[:50]}...")
 
     sys.exit(0)
