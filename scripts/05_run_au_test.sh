@@ -172,6 +172,7 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
             -z "$CONSTRAINED" \
             -te "$UNCONSTRAINED" \
             -au \
+            -zb "$N_BOOTSTRAP" \
             -redo \
             --prefix "$AU_OUT" \
             >> "$LOG" 2>&1
