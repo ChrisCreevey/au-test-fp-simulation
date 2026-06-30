@@ -39,29 +39,31 @@ PARENT2_LEN = 500  # Length of parent_gene_2 region
 TOTAL_LEN = PARENT1_LEN + PARENT2_LEN
 
 # ============================================================================
-# Generate Random Sequences
+# Generate Random Sequences (Amino Acids)
 # ============================================================================
 
 def generate_sequence(length: int, seed_offset: int = 0) -> str:
-    """Generate a random DNA sequence."""
+    """Generate a random amino acid sequence."""
     random.seed(seed_offset)
-    bases = ['A', 'T', 'G', 'C']
-    return ''.join(random.choice(bases) for _ in range(length))
+    # Standard 20 amino acids
+    amino_acids = list('ACDEFGHIKLMNPQRSTVWY')
+    return ''.join(random.choice(amino_acids) for _ in range(length))
 
 
-def evolve_sequence(ancestor: str, branch_length: float, mutation_rate: float = 0.01) -> str:
+def evolve_sequence(ancestor: str, branch_length: float, mutation_rate: float = 0.02) -> str:
     """
     Evolve a sequence down a branch.
     branch_length controls number of mutations (approx).
+    mutation_rate is per-site per-unit-branch-length (for amino acids).
     """
     seq = list(ancestor)
     num_mutations = int(len(seq) * branch_length * mutation_rate)
+    amino_acids = list('ACDEFGHIKLMNPQRSTVWY')
 
     for _ in range(num_mutations):
         pos = random.randint(0, len(seq) - 1)
-        bases = ['A', 'T', 'G', 'C']
-        bases.remove(seq[pos])
-        seq[pos] = random.choice(bases)
+        available_aas = [aa for aa in amino_acids if aa != seq[pos]]
+        seq[pos] = random.choice(available_aas)
 
     return ''.join(seq)
 
@@ -70,10 +72,10 @@ def evolve_sequence(ancestor: str, branch_length: float, mutation_rate: float = 
 # Create Sequences
 # ============================================================================
 
-print("Generating example dataset...")
-print(f"  Parent_gene_1 region: {PARENT1_LEN} bp")
-print(f"  Parent_gene_2 region: {PARENT2_LEN} bp")
-print(f"  Total alignment length: {TOTAL_LEN} bp")
+print("Generating example dataset (amino acids)...")
+print(f"  Parent_gene_1 region: {PARENT1_LEN} aa")
+print(f"  Parent_gene_2 region: {PARENT2_LEN} aa")
+print(f"  Total alignment length: {TOTAL_LEN} aa")
 print()
 
 # Create ancestral sequences
@@ -203,8 +205,8 @@ for gene_type in ['Parent_gene_1', 'Parent_gene_2', 'fused']:
     taxa = [t for t, gt in TAXA.items() if gt == gene_type]
     print(f"  {gene_type}: {', '.join(taxa)}")
 print()
-print("Alignment structure:")
-print(f"  Total length: {TOTAL_LEN} bp")
+print("Alignment structure (amino acids):")
+print(f"  Total length: {TOTAL_LEN} aa")
 print(f"  Parent_gene_1 region: positions 1-{PARENT1_LEN}")
 print(f"  Parent_gene_2 region: positions {PARENT1_LEN+1}-{TOTAL_LEN}")
 print()
