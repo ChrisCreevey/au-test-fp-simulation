@@ -185,9 +185,9 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
     # Extract AU test p-value from IQTree output
     au_rejected=0
     if [[ -f "${AU_OUT}.iqtree" ]]; then
-        # Extract AU p-value from tree comparison table
-        # Pattern: column with "AU" header, looking for second tree's p-value
-        au_pval=$(grep -E "^\s+2\s+" "${AU_OUT}.iqtree" | awk '{print $NF}' || echo "NA")
+        # Extract AU p-value from tree comparison table (line starting with "  2")
+        # AU p-value is in second-to-last field; last field is +/- indicator
+        au_pval=$(grep -E "^\s+2\s+" "${AU_OUT}.iqtree" | awk '{gsub(/[+-]$/, "", $(NF-1)); print $(NF-1)}' || echo "NA")
 
         if [[ "$au_pval" != "NA" && "$au_pval" != "" ]]; then
             # Check if p-value < 0.05 (reject constraint)
