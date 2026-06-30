@@ -194,8 +194,8 @@ else
     log "Simulating sequences from consensus ancestral sequence..."
 
     # SeqGen with -k1 flag uses first sequence from alignment as ancestral
-    # We provide: consensus sequence file (as Phylip), then the tree on stdin
-    if (cat "$CONSENSUS_FILE" && cat "$TREE") | $SEQGEN_BIN $SIM_MODEL -k1 -n"$N_REPLICATES" > "$OUTPUT_SIM"; then
+    # Provide consensus alignment on stdin, tree file as argument
+    if cat "$CONSENSUS_FILE" | $SEQGEN_BIN $SIM_MODEL -k1 -n"$N_REPLICATES" "$TREE" > "$OUTPUT_SIM"; then
         log "Simulation completed: $OUTPUT_SIM"
     else
         log "ERROR: SeqGen failed"
