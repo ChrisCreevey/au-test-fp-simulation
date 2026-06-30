@@ -141,7 +141,7 @@ parse_model_for_seqgen() {
     # Handle gamma rate variation (+G)
     if [[ "$iqtree_model" =~ \+G ]]; then
         # Extract number of categories from +G<n> or use default
-        local gamma_cats=$(echo "$iqtree_model" | grep -oP '\+G\d+' | grep -oP '\d+' || echo "4")
+        local gamma_cats=$(echo "$iqtree_model" | grep -oE '\+G[0-9]+' | grep -oE '[0-9]+' || echo "4")
         local alpha=""
 
         # Try to extract alpha from IQTree log file
@@ -151,9 +151,7 @@ parse_model_for_seqgen() {
 
         if [[ -n "$alpha" ]]; then
             seqgen_model="${seqgen_model} -g${gamma_cats} -a${alpha}"
-            log "Extracted alpha from IQTree: $alpha (categories: $gamma_cats)"
         else
-            log "WARN: Could not extract gamma alpha from log file, using default"
             seqgen_model="${seqgen_model} -g${gamma_cats} -a1.0"
         fi
     fi
