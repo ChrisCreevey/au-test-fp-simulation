@@ -60,7 +60,11 @@ def summarize_per_rhg(
         # Mixed Alignment AU Test
         # ====================================================================
 
+        # Try .txt first (legacy), then .iqtree (IQTree2 output)
         au_file = rep_dir / 'au_test_result.txt'
+        if not au_file.exists():
+            au_file = rep_dir / 'au_test_result.iqtree'
+
         if au_file.exists():
             au_pval = extract_au_pvalue(str(au_file))
 

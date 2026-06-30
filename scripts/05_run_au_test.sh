@@ -164,13 +164,17 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
     # ====================================================================
 
     AU_OUT="${REP_OUTPUT_DIR}/au_test_result"
+    TREES_FOR_AU="${REP_OUTPUT_DIR}/trees_for_au.nwk"
 
-    if [[ ! -f "${AU_OUT}.txt" || "$FORCE_RERUN" == "true" ]]; then
+    if [[ ! -f "${AU_OUT}.iqtree" || "$FORCE_RERUN" == "true" ]]; then
+        # Combine both trees into one file for AU test comparison
+        cat "$CONSTRAINED" "$UNCONSTRAINED" > "$TREES_FOR_AU"
+
+        # Run AU test comparing the two topologies
         $IQTREE_BIN \
             -s "$MASKED_ALN" \
             -m "$MODEL" \
-            -z "$CONSTRAINED" \
-            -te "$UNCONSTRAINED" \
+            -z "$TREES_FOR_AU" \
             -au \
             -zb "$N_BOOTSTRAP" \
             -redo \
@@ -178,12 +182,14 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
             >> "$LOG" 2>&1
     fi
 
-    # Extract AU test p-value
+    # Extract AU test p-value from IQTree output
     au_rejected=0
-    if [[ -f "${AU_OUT}.txt" ]]; then
-        au_pval=$(grep -oP "AU\s+\K[0-9.]+" "${AU_OUT}.txt" | head -1 || echo "NA")
+    if [[ -f "${AU_OUT}.iqtree" ]]; then
+        # Extract AU p-value from tree comparison table
+        # Pattern: column with "AU" header, looking for second tree's p-value
+        au_pval=$(grep -E "^\s+2\s+" "${AU_OUT}.iqtree" | awk '{print $NF}' || echo "NA")
 
-        if [[ "$au_pval" != "NA" ]]; then
+        if [[ "$au_pval" != "NA" && "$au_pval" != "" ]]; then
             # Check if p-value < 0.05 (reject constraint)
             if (( $(echo "$au_pval < 0.05" | bc -l) )); then
                 ((au_reject_count++))
