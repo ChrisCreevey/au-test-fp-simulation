@@ -149,11 +149,12 @@ for masked_aln in "$STEP3_OUTPUT_DIR"/rep_*_masked.aln; do
     CONSTRAINED="${REP_OUTPUT_DIR}/masked_constrained"
 
     if [[ ! -f "${CONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
+        # Note: Cannot use -bb with -te (bootstrap incompatible with tree constraint)
+        # Just evaluate the constrained topology without bootstrap
         $IQTREE_BIN \
             -s "$masked_aln" \
             -te "$CONSTRAINED_TREE" \
             -m "$MODEL" \
-            -bb "$N_BOOTSTRAP" \
             -redo \
             --prefix "$CONSTRAINED" \
             >> "$LOG" 2>&1
