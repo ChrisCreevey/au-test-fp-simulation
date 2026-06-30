@@ -121,6 +121,7 @@ parse_model_for_seqgen() {
     # Build SeqGen model string
     local seqgen_model=""
 
+    # Nucleotide models
     if [[ "$iqtree_model" =~ GTR ]]; then
         seqgen_model="-mGTR"
     elif [[ "$iqtree_model" =~ HKY ]]; then
@@ -133,9 +134,20 @@ parse_model_for_seqgen() {
         seqgen_model="-mTVM"
     elif [[ "$iqtree_model" =~ TrN ]]; then
         seqgen_model="-mTrN"
+    # Amino acid models
+    elif [[ "$iqtree_model" =~ WAG ]]; then
+        seqgen_model="-mWAG"
+    elif [[ "$iqtree_model" =~ JTT ]]; then
+        seqgen_model="-mJTT"
+    elif [[ "$iqtree_model" =~ PAM ]]; then
+        seqgen_model="-mPAM"
+    elif [[ "$iqtree_model" =~ LG ]]; then
+        # LG not in SeqGen, use WAG as closest substitute
+        log "WARN: LG model not supported in SeqGen, using WAG"
+        seqgen_model="-mWAG"
     else
-        log "WARN: Unknown model $iqtree_model, using GTR as fallback"
-        seqgen_model="-mGTR"
+        log "WARN: Unknown model $iqtree_model, using WAG as fallback"
+        seqgen_model="-mWAG"
     fi
 
     # Handle gamma rate variation (+G)
@@ -184,7 +196,7 @@ log "Consensus sequence calculated for ancestral state"
 
 SIM_MODEL=$(parse_model_for_seqgen "$MODEL" "$TREE")
 
-log "SeqGen command: $SEQGEN_BIN $SIM_MODEL -k1 -n$N_REPLICATES"
+log "SeqGen command: $SEQGEN_BIN $SIM_MODEL -n$N_REPLICATES"
 
 OUTPUT_SIM="${OUTPUT_DIR}/simulated_combined.phy"
 
@@ -193,9 +205,9 @@ if [[ -f "$OUTPUT_SIM" && "$FORCE_RERUN" != "true" ]]; then
 else
     log "Simulating sequences from consensus ancestral sequence..."
 
-    # SeqGen with -k1 flag: use first sequence (ANCESTRAL) as root for evolution
+    # SeqGen evolves from consensus sequence (ANCESTRAL) down the tree
     # Consensus alignment on stdin, tree file as argument
-    if cat "$CONSENSUS_FILE" | $SEQGEN_BIN $SIM_MODEL -k1 -n"$N_REPLICATES" "$TREE" > "$OUTPUT_SIM"; then
+    if cat "$CONSENSUS_FILE" | $SEQGEN_BIN $SIM_MODEL -n"$N_REPLICATES" "$TREE" > "$OUTPUT_SIM"; then
         log "Simulation completed: $OUTPUT_SIM"
     else
         log "ERROR: SeqGen failed"

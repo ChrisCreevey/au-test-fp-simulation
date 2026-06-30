@@ -170,7 +170,7 @@ print("Creating model file...")
 
 model_file = OUTPUT_DIR / 'model.txt'
 with open(model_file, 'w') as f:
-    f.write("LG+G4\n")
+    f.write("WAG+G4\n")
 
 print(f"  Written: {model_file}")
 
