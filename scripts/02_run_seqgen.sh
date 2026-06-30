@@ -184,7 +184,7 @@ log "Consensus sequence calculated for ancestral state"
 
 SIM_MODEL=$(parse_model_for_seqgen "$MODEL" "$TREE")
 
-log "SeqGen command: $SEQGEN_BIN $SIM_MODEL -k1 -n$N_REPLICATES"
+log "SeqGen command: $SEQGEN_BIN $SIM_MODEL -n$N_REPLICATES"
 
 OUTPUT_SIM="${OUTPUT_DIR}/simulated_combined.phy"
 
@@ -193,9 +193,10 @@ if [[ -f "$OUTPUT_SIM" && "$FORCE_RERUN" != "true" ]]; then
 else
     log "Simulating sequences from consensus ancestral sequence..."
 
-    # SeqGen with -k1 flag uses first sequence from alignment as ancestral
+    # SeqGen with consensus alignment (all taxa identical sequence)
+    # Evolves from consensus state down the tree for each replicate
     # Provide consensus alignment on stdin, tree file as argument
-    if cat "$CONSENSUS_FILE" | $SEQGEN_BIN $SIM_MODEL -k1 -n"$N_REPLICATES" "$TREE" > "$OUTPUT_SIM"; then
+    if cat "$CONSENSUS_FILE" | $SEQGEN_BIN $SIM_MODEL -n"$N_REPLICATES" "$TREE" > "$OUTPUT_SIM"; then
         log "Simulation completed: $OUTPUT_SIM"
     else
         log "ERROR: SeqGen failed"
