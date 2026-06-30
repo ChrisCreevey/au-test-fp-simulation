@@ -7,7 +7,7 @@ Checks:
   - Taxon names match between files
   - Tree is valid Newick format
   - Model string is valid IQTree notation
-  - Fusion taxa exist in alignments
+  - Gap patterns show mixed gene composition
 """
 
 import sys
@@ -31,7 +31,7 @@ def read_fasta(filename):
                 if line.startswith('>'):
                     if current_taxon:
                         seqs[current_taxon] = ''.join(current_seq)
-                    current_taxon = line[1:].split()[0]  # Use first word as taxon name
+                    current_taxon = line[1:].split()[0]
                     current_seq = []
                 else:
                     current_seq.append(line)
@@ -40,43 +40,6 @@ def read_fasta(filename):
     except Exception as e:
         print(f"ERROR reading FASTA {filename}: {e}", file=sys.stderr)
         return None
-
-    return seqs
-
-
-def read_phylip(filename):
-    """Read Phylip format alignment."""
-    seqs = {}
-
-    try:
-        with open(filename, 'r') as f:
-            lines = f.readlines()
-            if len(lines) < 2:
-                print(f"ERROR: {filename} too short for Phylip format", file=sys.stderr)
-                return None
-
-            # Skip header line
-            for line in lines[1:]:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(None, 1)
-                if len(parts) == 2:
-                    taxon, seq = parts
-                    seqs[taxon] = seq
-
-    except Exception as e:
-        print(f"ERROR reading Phylip {filename}: {e}", file=sys.stderr)
-        return None
-
-    return seqs if seqs else None
-
-
-def read_alignment(filename):
-    """Try to read alignment file in FASTA or Phylip format."""
-    seqs = read_fasta(filename)
-    if not seqs or len(seqs) == 0:
-        seqs = read_phylip(filename)
 
     return seqs
 
@@ -103,7 +66,6 @@ def extract_taxa_from_newick(newick):
         if char in '():;,':
             if current_taxon:
                 taxon = ''.join(current_taxon).strip()
-                # Remove branch length notation
                 taxon = taxon.split(':')[0]
                 if taxon and taxon not in ['', ' ']:
                     taxa.add(taxon)
@@ -128,10 +90,75 @@ def validate_model(model_str):
 
     if base_model not in valid_models:
         print(f"WARNING: Unknown base model '{base_model}' in '{model_str}'", file=sys.stderr)
-        print(f"  Valid models: {', '.join(valid_models)}", file=sys.stderr)
         return False
 
     return True
+
+
+def analyze_gap_patterns(seqs):
+    """
+    Analyze gap patterns to infer gene composition.
+    Returns dict: {taxon: 'parent_1', 'parent_2', or 'both'}
+    """
+    if not seqs:
+        return {}
+
+    # Find regions by looking for gap patterns across all sequences
+    aln_length = len(list(seqs.values())[0])
+    gap_counts = [0] * aln_length
+
+    for seq in seqs.values():
+        for i, char in enumerate(seq):
+            if char == '-':
+                gap_counts[i] += 1
+
+    # Find likely boundaries (regions where almost all taxa have gaps)
+    # This is a heuristic approach
+    taxa_composition = {}
+
+    for taxon, seq in seqs.items():
+        gap_positions = [i for i, c in enumerate(seq) if c == '-']
+
+        if not gap_positions:
+            # No gaps = has both regions
+            taxa_composition[taxon] = 'both'
+        elif len(gap_positions) == aln_length:
+            # All gaps = absent (shouldn't happen)
+            taxa_composition[taxon] = 'absent'
+        else:
+            # Some gaps - need to check if they're at start or end
+            gap_ranges = []
+            in_gap = False
+            gap_start = None
+
+            for i in range(aln_length):
+                if seq[i] == '-':
+                    if not in_gap:
+                        gap_start = i
+                        in_gap = True
+                else:
+                    if in_gap:
+                        gap_ranges.append((gap_start, i - 1))
+                        in_gap = False
+
+            if in_gap:
+                gap_ranges.append((gap_start, aln_length - 1))
+
+            # If gaps are only at the start, it's parent_2
+            # If gaps are only at the end, it's parent_1
+            # Otherwise, complex pattern
+            if len(gap_ranges) == 1:
+                gap_start, gap_end = gap_ranges[0]
+                if gap_start == 0:
+                    taxa_composition[taxon] = 'parent_2'
+                elif gap_end == aln_length - 1:
+                    taxa_composition[taxon] = 'parent_1'
+                else:
+                    taxa_composition[taxon] = 'mixed'
+            else:
+                taxa_composition[taxon] = 'mixed'
+
+    return taxa_composition
 
 
 def main():
@@ -159,12 +186,9 @@ def main():
     # ========================================================================
 
     required_files = [
-        'block1.aln',
-        'block2.aln',
+        'combined.aln',
         'constrained.nwk',
-        'model_block1.txt',
-        'model_block2.txt',
-        'presence_absence.txt'
+        'model.txt'
     ]
 
     for fname in required_files:
@@ -181,23 +205,19 @@ def main():
         sys.exit(1)
 
     # ========================================================================
-    # Read and Validate Alignments
+    # Read and Validate Alignment
     # ========================================================================
 
-    print("\nValidating alignments...")
+    print("\nValidating combined alignment...")
 
-    aln1 = read_alignment(str(input_dir / 'block1.aln'))
-    aln2 = read_alignment(str(input_dir / 'block2.aln'))
+    aln = read_fasta(str(input_dir / 'combined.aln'))
 
-    if not aln1:
-        errors.append("Failed to read block1.aln (invalid FASTA/Phylip format)")
+    if not aln:
+        errors.append("Failed to read combined.aln (invalid FASTA format)")
     else:
-        print(f"✓ block1.aln: {len(aln1)} sequences, {len(list(aln1.values())[0])} bp")
-
-    if not aln2:
-        errors.append("Failed to read block2.aln (invalid FASTA/Phylip format)")
-    else:
-        print(f"✓ block2.aln: {len(aln2)} sequences, {len(list(aln2.values())[0])} bp")
+        aln_length = len(list(aln.values())[0])
+        n_taxa = len(aln)
+        print(f"✓ combined.aln: {n_taxa} sequences, {aln_length} bp (with gaps)")
 
     if errors:
         print("\nFATAL ERRORS:", file=sys.stderr)
@@ -206,7 +226,7 @@ def main():
         sys.exit(1)
 
     # ========================================================================
-    # Validate Trees
+    # Validate Tree
     # ========================================================================
 
     print("\nValidating tree...")
@@ -226,90 +246,50 @@ def main():
         sys.exit(1)
 
     # ========================================================================
-    # Validate Models
+    # Validate Model
     # ========================================================================
 
-    print("\nValidating models...")
+    print("\nValidating model...")
 
-    with open(input_dir / 'model_block1.txt', 'r') as f:
-        model1 = f.read().strip()
-    with open(input_dir / 'model_block2.txt', 'r') as f:
-        model2 = f.read().strip()
+    with open(input_dir / 'model.txt', 'r') as f:
+        model = f.read().strip()
 
-    if not validate_model(model1):
-        warnings.append(f"Unusual model for block 1: {model1}")
+    if not validate_model(model):
+        warnings.append(f"Unusual model: {model}")
     else:
-        print(f"✓ model_block1.txt: {model1}")
-
-    if not validate_model(model2):
-        warnings.append(f"Unusual model for block 2: {model2}")
-    else:
-        print(f"✓ model_block2.txt: {model2}")
+        print(f"✓ model.txt: {model}")
 
     # ========================================================================
-    # Validate Presence/Absence File
+    # Analyze Gap Patterns
     # ========================================================================
 
-    print("\nValidating presence/absence matrix...")
+    print("\nAnalyzing gap patterns...")
 
-    pa_file = input_dir / 'presence_absence.txt'
-    presence_absence = {}
-    fused_taxa = set()
-    parent1_taxa = set()
-    parent2_taxa = set()
-    absent_taxa = set()
+    composition = analyze_gap_patterns(aln)
 
-    try:
-        with open(pa_file, 'r') as f:
-            lines = f.readlines()
+    parent_1_count = sum(1 for c in composition.values() if c == 'parent_1')
+    parent_2_count = sum(1 for c in composition.values() if c == 'parent_2')
+    both_count = sum(1 for c in composition.values() if c == 'both')
+    mixed_count = sum(1 for c in composition.values() if c == 'mixed')
 
-        # Skip header
-        for line in lines[1:]:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
+    print(f"✓ Gene composition:")
+    print(f"    Parent_gene_1 only: {parent_1_count}")
+    print(f"    Parent_gene_2 only: {parent_2_count}")
+    print(f"    Both (fused): {both_count}")
+    print(f"    Mixed/complex: {mixed_count}")
 
-            parts = line.split('\t')
-            if len(parts) != 2:
-                warnings.append(f"Malformed line in presence_absence.txt: {line}")
-                continue
+    # Check for realistic composition
+    if both_count == 0:
+        errors.append("No taxa with both genes found (need fused genes)")
 
-            taxon, gene_type = parts[0].strip(), parts[1].strip()
-            presence_absence[taxon] = gene_type
+    if parent_1_count + parent_2_count == 0:
+        errors.append("No parent-only taxa found (need non-fused genes)")
 
-            if gene_type == 'fused':
-                fused_taxa.add(taxon)
-            elif gene_type == 'Parent_gene_1':
-                parent1_taxa.add(taxon)
-            elif gene_type == 'Parent_gene_2':
-                parent2_taxa.add(taxon)
-            elif gene_type == 'absent':
-                absent_taxa.add(taxon)
-            else:
-                warnings.append(f"Unknown gene_type '{gene_type}' for {taxon}")
-
-    except Exception as e:
-        errors.append(f"Error reading presence_absence.txt: {e}")
-
-    if not errors:
-        print(f"✓ presence_absence.txt: {len(presence_absence)} taxa")
-        print(f"    Fused: {len(fused_taxa)}")
-        print(f"    Parent_gene_1 only: {len(parent1_taxa)}")
-        print(f"    Parent_gene_2 only: {len(parent2_taxa)}")
-        print(f"    Absent: {len(absent_taxa)}")
-
-        # Check that there is at least one fused taxon
-        if not fused_taxa:
-            errors.append("No fused taxa found in presence_absence.txt")
-        else:
-            print(f"  Fused taxa: {', '.join(sorted(fused_taxa)[:3])}...")
-
-        # Check that there is at least one non-fused taxon
-        non_fused = parent1_taxa | parent2_taxa
-        if not non_fused:
-            errors.append("No non-fused taxa found (need at least one for comparison)")
-        else:
-            print(f"  Non-fused taxa: {len(non_fused)}")
+    if errors:
+        print("\nFATAL ERRORS:", file=sys.stderr)
+        for err in errors:
+            print(f"  ✗ {err}", file=sys.stderr)
+        sys.exit(1)
 
     # ========================================================================
     # Cross-Validation: Taxon Name Consistency
@@ -317,36 +297,14 @@ def main():
 
     print("\nValidating taxon name consistency...")
 
-    aln1_taxa = set(aln1.keys())
-    aln2_taxa = set(aln2.keys())
-    pa_taxa = set(presence_absence.keys())
+    aln_taxa = set(aln.keys())
 
-    if aln1_taxa != aln2_taxa:
-        warnings.append("Taxon sets differ between block1 and block2")
-        print(f"  block1 only: {aln1_taxa - aln2_taxa}")
-        print(f"  block2 only: {aln2_taxa - aln1_taxa}")
-
-    if tree_taxa:
-        # Tree should have all non-absent taxa
-        expected_tree_taxa = aln1_taxa
-        if tree_taxa != expected_tree_taxa:
-            warnings.append("Tree taxa don't match alignment taxa")
-            print(f"  tree only: {tree_taxa - expected_tree_taxa}")
-            print(f"  aln only: {expected_tree_taxa - tree_taxa}")
-
-    # Check that presence_absence taxa cover alignments
-    missing_pa = aln1_taxa - pa_taxa
-    if missing_pa:
-        errors.append(f"Taxa in alignments but not in presence_absence.txt: {missing_pa}")
+    if tree_taxa and tree_taxa != aln_taxa:
+        warnings.append("Tree taxa don't match alignment taxa")
+        print(f"  tree only: {tree_taxa - aln_taxa}")
+        print(f"  aln only: {aln_taxa - tree_taxa}")
     else:
-        print("✓ All alignment taxa found in presence_absence.txt")
-
-    # Check that fused taxa are correctly marked
-    for taxon in fused_taxa:
-        if taxon not in aln1_taxa:
-            warnings.append(f"Fused taxon '{taxon}' not in alignment")
-        else:
-            print(f"  ✓ Fused taxon '{taxon}' found in alignment")
+        print("✓ All taxon names match between alignment and tree")
 
     # ========================================================================
     # Report Results

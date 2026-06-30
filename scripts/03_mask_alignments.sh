@@ -1,12 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Step 3: Apply single-origin fusion pattern (masking step)
-# For each replicate:
-#   - Fusion clade taxa: concatenate block1 + block2 sequences
-#   - Non-fusion taxa: keep block1 and block2 separate
-# Input: simulated_block1.phy, simulated_block2.phy from Step 2
-# Output: rep_001_block1.aln, rep_001_block2.aln, ..., rep_100_block1.aln, rep_100_block2.aln
+# Step 3: Apply gap pattern from original alignment to simulated sequences
+# Input: simulated_combined.phy (ungapped), original combined.aln (with gaps)
+# Output: rep_001_masked.aln, rep_002_masked.aln, ... (with gap pattern applied)
 
 # ============================================================================
 # Setup
@@ -20,7 +17,7 @@ usage() {
 Usage: $(basename "$0") -i <input_dir> -o <output_dir> -c <config_file> [-f]
 
 Required:
-  -i <input_dir>        Input RHG directory (contains fusion_taxa.txt)
+  -i <input_dir>        Input RHG directory
   -o <output_dir>       Output directory for step 3 results
   -c <config_file>      Config file
 
@@ -40,14 +37,12 @@ INPUT_DIR=""
 OUTPUT_DIR=""
 CONFIG_FILE=""
 FORCE_RERUN=false
-STEP2_OUTPUT_DIR=""
 
-while getopts "i:o:c:s:fh" opt; do
+while getopts "i:o:c:fh" opt; do
     case $opt in
         i) INPUT_DIR="$OPTARG" ;;
         o) OUTPUT_DIR="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
-        s) STEP2_OUTPUT_DIR="$OPTARG" ;;
         f) FORCE_RERUN=true ;;
         h) usage ;;
         *) usage ;;
@@ -71,18 +66,16 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $@" | tee -a "$LOG"
 }
 
-log "Starting Step 3: Apply Single-Origin Fusion Masking"
+log "Starting Step 3: Apply Gap Pattern from Original Alignment"
 log "Output directory: $OUTPUT_DIR"
 
 # Find Step 2 output directory
-if [[ -z "$STEP2_OUTPUT_DIR" ]]; then
-    PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-    STEP2_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step2_* 2>/dev/null | head -1)
+PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
+STEP2_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step2_* 2>/dev/null | head -1)
 
-    if [[ -z "$STEP2_OUTPUT_DIR" ]]; then
-        log "ERROR: Could not find Step 2 output directory"
-        exit 1
-    fi
+if [[ -z "$STEP2_OUTPUT_DIR" ]]; then
+    log "ERROR: Could not find Step 2 output directory"
+    exit 1
 fi
 
 log "Using Step 2 output from: $STEP2_OUTPUT_DIR"
@@ -91,18 +84,18 @@ log "Using Step 2 output from: $STEP2_OUTPUT_DIR"
 # Check Inputs
 # ============================================================================
 
-PA_FILE="${INPUT_DIR}/presence_absence.txt"
-SIM1="${STEP2_OUTPUT_DIR}/simulated_block1.phy"
-SIM2="${STEP2_OUTPUT_DIR}/simulated_block2.phy"
+ORIGINAL_ALN="${INPUT_DIR}/combined.aln"
+SIM="${STEP2_OUTPUT_DIR}/simulated_combined.phy"
 
-for file in "$PA_FILE" "$SIM1" "$SIM2"; do
+for file in "$ORIGINAL_ALN" "$SIM"; do
     if [[ ! -f "$file" ]]; then
         log "ERROR: Required file not found: $file"
         exit 1
     fi
 done
 
-log "Presence/absence file: $PA_FILE"
+log "Original alignment: $ORIGINAL_ALN"
+log "Simulated sequences: $SIM"
 
 # ============================================================================
 # Call Python Masking Script
@@ -110,10 +103,9 @@ log "Presence/absence file: $PA_FILE"
 
 log "Running Python masking script..."
 
-"$PYTHON_BIN" "$SRC_DIR/apply_fusion_mask.py" \
-    --sim-block1 "$SIM1" \
-    --sim-block2 "$SIM2" \
-    --presence-absence-file "$PA_FILE" \
+"$PYTHON_BIN" "$SRC_DIR/apply_gap_pattern.py" \
+    --original-aln "$ORIGINAL_ALN" \
+    --simulated-seqs "$SIM" \
     --output-dir "$OUTPUT_DIR" \
     --n-replicates "$N_REPLICATES" \
     --log "$LOG"
@@ -129,10 +121,10 @@ fi
 
 log "Verifying output..."
 
-expected_files=$N_REPLICATES  # 1 mixed alignment per replicate
-actual_files=$(ls -1 "$OUTPUT_DIR"/rep_*_mixed.aln 2>/dev/null | wc -l)
+expected_files=$N_REPLICATES
+actual_files=$(ls -1 "$OUTPUT_DIR"/rep_*_masked.aln 2>/dev/null | wc -l)
 
-log "Expected files: $expected_files (1 mixed alignment per replicate)"
+log "Expected files: $expected_files"
 log "Actual files: $actual_files"
 
 if [[ $actual_files -lt $expected_files ]]; then
@@ -141,7 +133,7 @@ fi
 
 if [[ $actual_files -gt 0 ]]; then
     log "SUCCESS: Step 3 completed"
-    log "Mixed alignments (one per replicate) ready for tree reconstruction in Step 4"
+    log "Masked alignments ready for tree reconstruction in Step 4"
 else
     log "ERROR: No output files created"
     exit 1

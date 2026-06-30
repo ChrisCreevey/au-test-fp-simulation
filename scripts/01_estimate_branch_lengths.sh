@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Step 1: Estimate branch lengths on constrained tree for each component block
-# Input: constrained.nwk, block1.aln, block2.aln, model files
-# Output: block1_with_brlen.treefile, block2_with_brlen.treefile
+# Step 1: Estimate branch lengths on constrained tree for combined alignment
+# Input: constrained.nwk, combined.aln, model.txt
+# Output: combined_with_brlen.treefile (tree with branch lengths estimated)
 
 # ============================================================================
 # Setup
@@ -17,9 +17,9 @@ usage() {
 Usage: $(basename "$0") -i <input_dir> -o <output_dir> -c <config_file> [-f]
 
 Required:
-  -i <dir>              Input RHG directory (e.g., inputs/RHG_001)
-  -o <dir>              Output directory for step 1 results
-  -c <file>             Config file
+  -i <input_dir>        Input RHG directory (e.g., inputs/RHG_001)
+  -o <output_dir>       Output directory for step 1 results
+  -c <config_file>      Config file
 
 Optional:
   -f                    Force re-run even if output exists
@@ -75,92 +75,58 @@ log "Output directory: $OUTPUT_DIR"
 # Check Inputs
 # ============================================================================
 
-BLOCK1_ALN="${INPUT_DIR}/block1.aln"
-BLOCK2_ALN="${INPUT_DIR}/block2.aln"
+COMBINED_ALN="${INPUT_DIR}/combined.aln"
 CONSTRAINED_TREE="${INPUT_DIR}/constrained.nwk"
-MODEL1_FILE="${INPUT_DIR}/model_block1.txt"
-MODEL2_FILE="${INPUT_DIR}/model_block2.txt"
+MODEL_FILE="${INPUT_DIR}/model.txt"
 
-for file in "$BLOCK1_ALN" "$BLOCK2_ALN" "$CONSTRAINED_TREE" "$MODEL1_FILE" "$MODEL2_FILE"; do
+for file in "$COMBINED_ALN" "$CONSTRAINED_TREE" "$MODEL_FILE"; do
     if [[ ! -f "$file" ]]; then
         log "ERROR: Required file not found: $file"
         exit 1
     fi
 done
 
-# Read models
-MODEL1=$(cat "$MODEL1_FILE" | tr -d '[:space:]')
-MODEL2=$(cat "$MODEL2_FILE" | tr -d '[:space:]')
-
-log "Model for block 1: $MODEL1"
-log "Model for block 2: $MODEL2"
+MODEL=$(cat "$MODEL_FILE" | tr -d '[:space:]')
+log "Model: $MODEL"
 
 # ============================================================================
-# Process Block 1
+# Estimate Branch Lengths
 # ============================================================================
 
-log "Processing Block 1..."
+log "Re-estimating branch lengths on constrained tree..."
 
-OUTPUT1="${OUTPUT_DIR}/block1_with_brlen"
+OUTPUT="${OUTPUT_DIR}/combined_with_brlen"
 
-if [[ -f "${OUTPUT1}.treefile" && "$FORCE_RERUN" != "true" ]]; then
-    log "Block 1 branch length file already exists, skipping"
+if [[ -f "${OUTPUT}.treefile" && "$FORCE_RERUN" != "true" ]]; then
+    log "Branch length file already exists, skipping"
 else
     $IQTREE_BIN \
-        -s "$BLOCK1_ALN" \
+        -s "$COMBINED_ALN" \
         -te "$CONSTRAINED_TREE" \
-        -m "$MODEL1" \
+        -m "$MODEL" \
         -keep-ident \
         -redo \
-        -prefix "$OUTPUT1" \
+        -prefix "$OUTPUT" \
         >> "$LOG" 2>&1
 
-    if [[ ! -f "${OUTPUT1}.treefile" ]]; then
-        log "ERROR: IQTree failed for block 1"
+    if [[ ! -f "${OUTPUT}.treefile" ]]; then
+        log "ERROR: IQTree failed"
         exit 1
     fi
 fi
 
-log "Block 1 branch lengths estimated: ${OUTPUT1}.treefile"
-
-# ============================================================================
-# Process Block 2
-# ============================================================================
-
-log "Processing Block 2..."
-
-OUTPUT2="${OUTPUT_DIR}/block2_with_brlen"
-
-if [[ -f "${OUTPUT2}.treefile" && "$FORCE_RERUN" != "true" ]]; then
-    log "Block 2 branch length file already exists, skipping"
-else
-    $IQTREE_BIN \
-        -s "$BLOCK2_ALN" \
-        -te "$CONSTRAINED_TREE" \
-        -m "$MODEL2" \
-        -keep-ident \
-        -redo \
-        -prefix "$OUTPUT2" \
-        >> "$LOG" 2>&1
-
-    if [[ ! -f "${OUTPUT2}.treefile" ]]; then
-        log "ERROR: IQTree failed for block 2"
-        exit 1
-    fi
-fi
-
-log "Block 2 branch lengths estimated: ${OUTPUT2}.treefile"
+log "Branch lengths estimated: ${OUTPUT}.treefile"
 
 # ============================================================================
 # Verify Output
 # ============================================================================
 
-log "Verifying output files..."
+log "Verifying output..."
 
-if [[ -f "${OUTPUT1}.treefile" && -f "${OUTPUT2}.treefile" ]]; then
+if [[ -f "${OUTPUT}.treefile" ]]; then
     log "SUCCESS: Step 1 completed"
-    log "Output trees ready for SeqGen in Step 2"
+    log "Branch-length tree ready for SeqGen in Step 2"
 else
-    log "ERROR: Output trees not found"
+    log "ERROR: Output tree file not found"
     exit 1
 fi

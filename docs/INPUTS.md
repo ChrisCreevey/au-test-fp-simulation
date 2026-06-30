@@ -7,19 +7,13 @@ Place all input data for each RHG in its own directory under `inputs/`:
 ```
 inputs/
 ├── RHG_001/
-│   ├── block1.aln
-│   ├── block2.aln
+│   ├── combined.aln
 │   ├── constrained.nwk
-│   ├── model_block1.txt
-│   ├── model_block2.txt
-│   └── presence_absence.txt
+│   └── model.txt
 ├── RHG_002/
-│   ├── block1.aln
-│   ├── block2.aln
+│   ├── combined.aln
 │   ├── constrained.nwk
-│   ├── model_block1.txt
-│   ├── model_block2.txt
-│   └── presence_absence.txt
+│   └── model.txt
 ├── RHG_003/
 │   └── [same structure]
 └── template/
@@ -28,28 +22,39 @@ inputs/
 
 ## Required Files (Per RHG)
 
-### 1. `block1.aln` and `block2.aln`
+### 1. `combined.aln`
 
-**Content:** Trimmed DNA sequence alignments (one per component homologous block)
+**Content:** Combined DNA sequence alignment with both parent gene regions
 
 **Format:** FASTA or Phylip (IQTree auto-detects)
+
+**Structure:**
+- Single alignment containing the full sequence space of both parent genes
+- Gap characters (`-`) indicate missing regions:
+  - Parent_gene_1 only: gaps where parent_gene_2 region would be
+  - Parent_gene_2 only: gaps where parent_gene_1 region would be
+  - Fused: sequences for both regions (no gaps between)
 
 **Example (FASTA):**
 ```
 >species_A
-ATGCGATCG...
+ATGCGATCG----------CGTAGGCTAGGCT
 >species_B
-ATGCGATCG...
+----------CGTAGGCTAGGCTAGGCTAGGC
 >species_C_fused
-ATGCGATCG...
+ATGCGATCGCGTAGGCTAGGCTAGGCTAGGC
+>species_D_fused
+ATGCGATCGCGTAGGCTAGGCTAGGCTAGGC
+>species_E
+ATGCGATCG----------CGTAGGCTAGGCT
 ```
 
 **Notes:**
-- Must include all taxa (fusion and non-fusion species)
-- Fusion clade taxa have sequences for both blocks
+- All taxa must be present (gaps indicate missing regions)
 - Alignment should already be trimmed (using trimAl `-gappyout` as in real analysis)
-- Alignment length is extracted automatically — used for SeqGen `-l` parameter
-- Sequence names must match exactly between blocks and the tree/fusion_taxa file
+- Gap positions automatically encode which genes each taxon carries
+- Sequence names must match exactly those in the constrained tree
+- The alignment length includes all gap positions
 
 ### 2. `constrained.nwk`
 
@@ -63,14 +68,14 @@ ATGCGATCG...
 ```
 
 **Notes:**
-- This is the **constrained** tree that enforces monophyly of the fusion clade
-- Taxon names must match exactly those in the alignments
+- This is the **constrained** tree that enforces monophyly of the fused clade
+- Taxon names must match exactly those in combined.aln
 - Branch lengths will be re-estimated in Step 1
-- Can be derived from species tree with fusion clade constrained to be monophyletic
+- Can be derived from species tree with fused clade constrained to be monophyletic
 
-### 3. `model_block1.txt` and `model_block2.txt`
+### 3. `model.txt`
 
-**Content:** Best-fit substitution model for each block (from ModelFinder)
+**Content:** Best-fit substitution model for the combined alignment (from ModelFinder)
 
 **Format:** Plain text, one model string per file
 
@@ -88,92 +93,66 @@ K80+G
 ```
 
 **Notes:**
-- Model is extracted from IQTree log file (`.iqtree` output)
+- Model is extracted from IQTree log file (`.iqtree` output) for the combined alignment
 - Look for line: `Best-fit model according to BIC: GTR+G4`
 - **Do not include** rate matrix details or base frequencies on separate lines
 - Format must match IQTree notation exactly (case-sensitive: `GTR`, not `gtr`)
 - If model includes gamma rate variation (`+G`), the alpha value will be extracted from Step 1 output
 - If model includes invariant sites (`+I`), this must be preserved in the model string
 
-### 4. `presence_absence.txt`
-
-**Content:** Gene presence/absence matrix for each taxon (which copy of the gene they carry)
-
-**Format:** Tab-separated, two columns: `species` and `gene_type`
-
-**Example:**
-```
-species	gene_type
-species_A	Parent_gene_1
-species_B	Parent_gene_2
-species_C_fused	fused
-species_D_fused	fused
-species_E	Parent_gene_1
-species_F	absent
-```
-
-**Valid gene_type values:**
-- `Parent_gene_1` — Taxon carries only the first component gene
-- `Parent_gene_2` — Taxon carries only the second component gene
-- `fused` — Taxon carries both components concatenated (fusion)
-- `absent` — Taxon is absent from this gene family
-
-**Notes:**
-- Taxon names must match exactly those in the alignments and tree
-- First line is a header (species, gene_type)
-- Tab-separated (not spaces)
-- This determines how each taxon is represented in Step 3 (masking)
-- All taxa in the tree/alignments should be represented in this file
-
 ## Preparing Input Data from Real Analysis
 
-### From MAFFT and trimAl Output
+### Create Combined Alignment
 ```bash
-# Alignments are already produced by your real pipeline
-# Just copy them to the input directory with standard names:
-cp my_analysis/RHG_001/block1.trimmed.aln inputs/RHG_001/block1.aln
-cp my_analysis/RHG_001/block2.trimmed.aln inputs/RHG_001/block2.aln
+# Your real analysis has block1.aln and block2.aln
+# Combine them into a single alignment with gaps showing gene presence:
+
+python3 << 'EOF'
+from Bio import AlignIO
+import sys
+
+# Read the two component alignments
+block1 = AlignIO.read('my_analysis/RHG_001/block1.trimmed.aln', 'fasta')
+block2 = AlignIO.read('my_analysis/RHG_001/block2.trimmed.aln', 'fasta')
+
+block1_len = block1.get_alignment_length()
+block2_len = block2.get_alignment_length()
+
+# Create combined alignment
+combined_seqs = {}
+
+# Add block1 sequences
+for seq_record in block1:
+    combined_seqs[seq_record.id] = str(seq_record.seq) + '-' * block2_len
+
+# Add/update with block2 sequences
+for seq_record in block2:
+    if seq_record.id in combined_seqs:
+        # Taxon in both blocks (fused)
+        combined_seqs[seq_record.id] = combined_seqs[seq_record.id][:block1_len] + str(seq_record.seq)
+    else:
+        # Taxon only in block2
+        combined_seqs[seq_record.id] = '-' * block1_len + str(seq_record.seq)
+
+# Write combined alignment
+with open('inputs/RHG_001/combined.aln', 'w') as f:
+    for taxon, seq in sorted(combined_seqs.items()):
+        f.write(f'>{taxon}\n{seq}\n')
+EOF
 ```
 
-### From IQTree Log Files
+### Extract Substitution Model
 ```bash
 # Extract best-fit model from IQTree output:
-grep "Best-fit model according to BIC" my_analysis/RHG_001/block1.iqtree | awk '{print $NF}' > inputs/RHG_001/model_block1.txt
-grep "Best-fit model according to BIC" my_analysis/RHG_001/block2.iqtree | awk '{print $NF}' > inputs/RHG_001/model_block2.txt
+# Use whichever block's model you prefer (or average them)
+grep "Best-fit model according to BIC" my_analysis/RHG_001/block1.iqtree | awk '{print $NF}' > inputs/RHG_001/model.txt
 ```
 
-### From Your Phylostratigraphic Output
+### Get Constrained Tree
 ```bash
-# Constrained tree should enforce monophyly of fusion clade
-# If you have a species tree and fusion clade list:
-# Use a phylogenetics tool (e.g., ETE Toolkit, APE) to create constrained tree
-
-python3 scripts/create_constrained_tree.py \
-  --species_tree species_tree.nwk \
-  --fusion_taxa RHG_001_fusion_taxa.txt \
-  --output inputs/RHG_001/constrained.nwk
-```
-
-### From RHG Presence/Absence Matrix
-```bash
-# Create presence/absence file from your RHG matrix
-# If you have a matrix showing which parent genes and fusions each species has:
-python3 << 'EOF'
-import pandas as pd
-
-# Load your RHG presence/absence matrix
-# Expected format: rows=species, columns=RHGs, values=Parent_gene_1/Parent_gene_2/fused/absent
-rhg_matrix = pd.read_csv('your_rhg_matrix.tsv', sep='\t', index_col=0)
-
-# Extract gene types for RHG_001
-rhg_001 = rhg_matrix['RHG_001']
-
-# Write to presence/absence file
-with open('inputs/RHG_001/presence_absence.txt', 'w') as f:
-    f.write('species\tgene_type\n')
-    for species, gene_type in rhg_001.items():
-        f.write(f'{species}\t{gene_type}\n')
-EOF
+# Use your constrained tree from real analysis
+# Should enforce monophyly of fused clade
+cp my_analysis/RHG_001/constrained.nwk inputs/RHG_001/constrained.nwk
 ```
 
 ## Validation
@@ -185,13 +164,12 @@ python3 src/validate_inputs.py inputs/RHG_001
 ```
 
 This checks:
-- ✓ All required files exist
+- ✓ All required files exist (combined.aln, constrained.nwk, model.txt)
 - ✓ Alignment format is readable
-- ✓ Taxon names match between files
+- ✓ Taxon names match between alignment and tree
 - ✓ Tree is valid Newick format
 - ✓ Model string is valid IQTree notation
-- ✓ Fusion taxa exist in alignments
-- ✓ At least one fusion and one non-fusion taxon
+- ✓ Gap patterns show mixed gene composition (at least one fused + one parent-only taxon)
 
 ## Template
 
@@ -199,5 +177,5 @@ A template RHG with dummy data is provided in `inputs/template/` for reference. 
 
 ```bash
 cp -r inputs/template inputs/RHG_001
-# Then edit the files with your actual data
+# Then edit the combined.aln, constrained.nwk, and model.txt with your actual data
 ```

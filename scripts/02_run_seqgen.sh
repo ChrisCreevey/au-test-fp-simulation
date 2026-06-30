@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Step 2: Simulate sequences using SeqGen
-# Input: branch length trees from Step 1, model files, alignment lengths
-# Output: simulated_block1.phy, simulated_block2.phy (100 replicates each)
+# Input: branch length tree from Step 1, model, original alignment
+# Output: simulated_combined.phy (100 replicates, ungapped)
 
 # ============================================================================
 # Setup
@@ -37,14 +37,12 @@ INPUT_DIR=""
 OUTPUT_DIR=""
 CONFIG_FILE=""
 FORCE_RERUN=false
-STEP1_OUTPUT_DIR=""
 
-while getopts "i:o:c:s:fh" opt; do
+while getopts "i:o:c:fh" opt; do
     case $opt in
         i) INPUT_DIR="$OPTARG" ;;
         o) OUTPUT_DIR="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
-        s) STEP1_OUTPUT_DIR="$OPTARG" ;;
         f) FORCE_RERUN=true ;;
         h) usage ;;
         *) usage ;;
@@ -73,14 +71,12 @@ log "Input directory: $INPUT_DIR"
 log "Output directory: $OUTPUT_DIR"
 
 # Find Step 1 output directory (look in parent's step1_* subdirectories)
-if [[ -z "$STEP1_OUTPUT_DIR" ]]; then
-    PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-    STEP1_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step1_* 2>/dev/null | head -1)
+PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
+STEP1_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step1_* 2>/dev/null | head -1)
 
-    if [[ -z "$STEP1_OUTPUT_DIR" ]]; then
-        log "ERROR: Could not find Step 1 output directory"
-        exit 1
-    fi
+if [[ -z "$STEP1_OUTPUT_DIR" ]]; then
+    log "ERROR: Could not find Step 1 output directory"
+    exit 1
 fi
 
 log "Using Step 1 output from: $STEP1_OUTPUT_DIR"
@@ -89,32 +85,25 @@ log "Using Step 1 output from: $STEP1_OUTPUT_DIR"
 # Check Inputs
 # ============================================================================
 
-BLOCK1_ALN="${INPUT_DIR}/block1.aln"
-BLOCK2_ALN="${INPUT_DIR}/block2.aln"
-MODEL1_FILE="${INPUT_DIR}/model_block1.txt"
-MODEL2_FILE="${INPUT_DIR}/model_block2.txt"
-TREE1="${STEP1_OUTPUT_DIR}/block1_with_brlen.treefile"
-TREE2="${STEP1_OUTPUT_DIR}/block2_with_brlen.treefile"
+COMBINED_ALN="${INPUT_DIR}/combined.aln"
+MODEL_FILE="${INPUT_DIR}/model.txt"
+TREE="${STEP1_OUTPUT_DIR}/combined_with_brlen.treefile"
 
-for file in "$BLOCK1_ALN" "$BLOCK2_ALN" "$MODEL1_FILE" "$MODEL2_FILE" "$TREE1" "$TREE2"; do
+for file in "$COMBINED_ALN" "$MODEL_FILE" "$TREE"; do
     if [[ ! -f "$file" ]]; then
         log "ERROR: Required file not found: $file"
         exit 1
     fi
 done
 
-MODEL1=$(cat "$MODEL1_FILE" | tr -d '[:space:]')
-MODEL2=$(cat "$MODEL2_FILE" | tr -d '[:space:]')
+MODEL=$(cat "$MODEL_FILE" | tr -d '[:space:]')
 
-# Get alignment lengths
-ALN_LEN1=$(grep -v "^>" "$BLOCK1_ALN" | head -1 | wc -c)
-ALN_LEN1=$((ALN_LEN1 - 1))  # Remove newline character
+# Get alignment length (ungapped)
+ALN_LEN=$(grep -v "^>" "$COMBINED_ALN" | head -1 | wc -c)
+ALN_LEN=$((ALN_LEN - 1))  # Remove newline character
 
-ALN_LEN2=$(grep -v "^>" "$BLOCK2_ALN" | head -1 | wc -c)
-ALN_LEN2=$((ALN_LEN2 - 1))
-
-log "Model for block 1: $MODEL1 (length: $ALN_LEN1)"
-log "Model for block 2: $MODEL2 (length: $ALN_LEN2)"
+log "Model: $MODEL"
+log "Alignment length (ungapped): $ALN_LEN"
 
 # ============================================================================
 # Helper Function: Parse Model and Extract Parameters
@@ -130,7 +119,6 @@ parse_model_for_seqgen() {
     iqtree_log="${tree_prefix}.iqtree"
 
     # Build SeqGen model string
-    # Handle basic model (GTR, HKY, JC, etc.)
     local seqgen_model=""
 
     if [[ "$iqtree_model" =~ GTR ]]; then
@@ -177,40 +165,21 @@ parse_model_for_seqgen() {
 # Run SeqGen
 # ============================================================================
 
-SIM_MODEL1=$(parse_model_for_seqgen "$MODEL1" "$TREE1")
-SIM_MODEL2=$(parse_model_for_seqgen "$MODEL2" "$TREE2")
+SIM_MODEL=$(parse_model_for_seqgen "$MODEL" "$TREE")
 
-log "SeqGen command for block 1: $SEQGEN_BIN $SIM_MODEL1 -l$ALN_LEN1 -n$N_REPLICATES"
-log "SeqGen command for block 2: $SEQGEN_BIN $SIM_MODEL2 -l$ALN_LEN2 -n$N_REPLICATES"
+log "SeqGen command: $SEQGEN_BIN $SIM_MODEL -l$ALN_LEN -n$N_REPLICATES"
 
-# Block 1
-OUTPUT_SIM1="${OUTPUT_DIR}/simulated_block1.phy"
+OUTPUT_SIM="${OUTPUT_DIR}/simulated_combined.phy"
 
-if [[ -f "$OUTPUT_SIM1" && "$FORCE_RERUN" != "true" ]]; then
-    log "Block 1 simulated sequences already exist, skipping"
+if [[ -f "$OUTPUT_SIM" && "$FORCE_RERUN" != "true" ]]; then
+    log "Simulated sequences already exist, skipping"
 else
-    log "Simulating Block 1 sequences..."
+    log "Simulating sequences..."
 
-    if cat "$TREE1" | $SEQGEN_BIN $SIM_MODEL1 -l"$ALN_LEN1" -n"$N_REPLICATES" > "$OUTPUT_SIM1"; then
-        log "Block 1 simulation completed: $OUTPUT_SIM1"
+    if cat "$TREE" | $SEQGEN_BIN $SIM_MODEL -l"$ALN_LEN" -n"$N_REPLICATES" > "$OUTPUT_SIM"; then
+        log "Simulation completed: $OUTPUT_SIM"
     else
-        log "ERROR: SeqGen failed for block 1"
-        exit 1
-    fi
-fi
-
-# Block 2
-OUTPUT_SIM2="${OUTPUT_DIR}/simulated_block2.phy"
-
-if [[ -f "$OUTPUT_SIM2" && "$FORCE_RERUN" != "true" ]]; then
-    log "Block 2 simulated sequences already exist, skipping"
-else
-    log "Simulating Block 2 sequences..."
-
-    if cat "$TREE2" | $SEQGEN_BIN $SIM_MODEL2 -l"$ALN_LEN2" -n"$N_REPLICATES" > "$OUTPUT_SIM2"; then
-        log "Block 2 simulation completed: $OUTPUT_SIM2"
-    else
-        log "ERROR: SeqGen failed for block 2"
+        log "ERROR: SeqGen failed"
         exit 1
     fi
 fi
@@ -221,22 +190,20 @@ fi
 
 log "Verifying SeqGen output..."
 
-if [[ ! -f "$OUTPUT_SIM1" ]] || [[ ! -f "$OUTPUT_SIM2" ]]; then
-    log "ERROR: Output files not created"
+if [[ ! -f "$OUTPUT_SIM" ]]; then
+    log "ERROR: Output file not created"
     exit 1
 fi
 
-# Check that files contain data
-SIM1_LINES=$(wc -l < "$OUTPUT_SIM1")
-SIM2_LINES=$(wc -l < "$OUTPUT_SIM2")
+# Check that file contains data
+SIM_LINES=$(wc -l < "$OUTPUT_SIM")
 
-log "Block 1 output: $SIM1_LINES lines"
-log "Block 2 output: $SIM2_LINES lines"
+log "Output file: $SIM_LINES lines"
 
-if [[ $SIM1_LINES -lt 2 ]] || [[ $SIM2_LINES -lt 2 ]]; then
-    log "ERROR: Output files are empty or too small"
+if [[ $SIM_LINES -lt 2 ]]; then
+    log "ERROR: Output file is empty or too small"
     exit 1
 fi
 
 log "SUCCESS: Step 2 completed"
-log "Simulated sequences ready for masking in Step 3"
+log "Simulated sequences ready for gap application in Step 3"

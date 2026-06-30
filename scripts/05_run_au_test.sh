@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Step 5: Run AU test on each replicate
 # For each replicate, run AU test comparing constrained vs unconstrained trees
-# Input: rep_*/mixed_unconstrained.treefile, rep_*/mixed_constrained.treefile
-# Output: rep_*/au_test_result.txt (AU test results and p-values)
+# Input: rep_*/masked_unconstrained.treefile, rep_*/masked_constrained.treefile
+# Output: rep_*/au_test_result.txt (AU test results)
 
 # ============================================================================
 # Setup
@@ -38,15 +38,12 @@ INPUT_DIR=""
 OUTPUT_DIR=""
 CONFIG_FILE=""
 FORCE_RERUN=false
-STEP3_OUTPUT_DIR=""
-STEP4_OUTPUT_DIR=""
 
-while getopts "i:o:c:s:fh" opt; do
+while getopts "i:o:c:fh" opt; do
     case $opt in
         i) INPUT_DIR="$OPTARG" ;;
         o) OUTPUT_DIR="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
-        s) STEP3_OUTPUT_DIR="$OPTARG" ;;
         f) FORCE_RERUN=true ;;
         h) usage ;;
         *) usage ;;
@@ -74,15 +71,9 @@ log "Starting Step 5: Run AU Test"
 log "Output directory: $OUTPUT_DIR"
 
 # Find Step 3 and Step 4 output directories
-if [[ -z "$STEP3_OUTPUT_DIR" ]]; then
-    PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-    STEP3_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step3_* 2>/dev/null | head -1)
-fi
-
-if [[ -z "$STEP4_OUTPUT_DIR" ]]; then
-    PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-    STEP4_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step4_* 2>/dev/null | head -1)
-fi
+PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
+STEP3_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step3_* 2>/dev/null | head -1)
+STEP4_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step4_* 2>/dev/null | head -1)
 
 if [[ -z "$STEP3_OUTPUT_DIR" || -z "$STEP4_OUTPUT_DIR" ]]; then
     log "ERROR: Could not find Step 3/4 output directories"
@@ -96,7 +87,7 @@ log "Using Step 4 output from: $STEP4_OUTPUT_DIR"
 # Check Inputs
 # ============================================================================
 
-MODEL=$(cat "${INPUT_DIR}/model_block1.txt" | tr -d '[:space:]')
+MODEL=$(cat "${INPUT_DIR}/model.txt" | tr -d '[:space:]')
 log "Using model: $MODEL"
 
 # ============================================================================
@@ -125,15 +116,15 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
     # Get alignment and tree files
     # ====================================================================
 
-    MIXED_ALN=$(ls "$STEP3_OUTPUT_DIR"/${rep_name}_mixed.aln 2>/dev/null || echo "")
+    MASKED_ALN=$(ls "$STEP3_OUTPUT_DIR"/${rep_name}_masked.aln 2>/dev/null || echo "")
 
-    if [[ ! -f "$MIXED_ALN" ]]; then
-        log "WARN: Mixed alignment not found for $rep_name, skipping"
+    if [[ ! -f "$MASKED_ALN" ]]; then
+        log "WARN: Masked alignment not found for $rep_name, skipping"
         continue
     fi
 
-    UNCONSTRAINED="${rep_dir}/mixed_unconstrained.treefile"
-    CONSTRAINED="${rep_dir}/mixed_constrained.treefile"
+    UNCONSTRAINED="${rep_dir}/masked_unconstrained.treefile"
+    CONSTRAINED="${rep_dir}/masked_constrained.treefile"
 
     if [[ ! -f "$UNCONSTRAINED" ]] || [[ ! -f "$CONSTRAINED" ]]; then
         log "WARN: Missing tree files for $rep_name, skipping"
@@ -148,7 +139,7 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
 
     if [[ ! -f "${AU_OUT}.txt" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
-            -s "$MIXED_ALN" \
+            -s "$MASKED_ALN" \
             -m "$MODEL" \
             -z "$CONSTRAINED" \
             -te "$UNCONSTRAINED" \
@@ -181,8 +172,8 @@ log "AU test rejections (p < 0.05): $au_reject_count / $rep_count"
 SUMMARY_FILE="${OUTPUT_DIR}/au_test_summary.txt"
 
 {
-    echo "AU Test Summary (Mixed Alignment)"
-    echo "=================================="
+    echo "AU Test Summary"
+    echo "==============="
     echo "Total replicates: $rep_count"
     echo "AU test rejections (p < 0.05): $au_reject_count"
 

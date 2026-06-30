@@ -3,10 +3,10 @@ set -euo pipefail
 
 # Step 4: Reconstruct gene trees for each simulated replicate
 # For each of 100 replicates:
-#   - Build unconstrained tree from mixed alignment
+#   - Build unconstrained tree from masked alignment
 #   - Build constrained tree forcing fused sequences to be monophyletic
-# Input: rep_001_mixed.aln, rep_002_mixed.aln, ... (from Step 3)
-# Output: rep_*/mixed_unconstrained.treefile, rep_*/mixed_constrained.treefile
+# Input: rep_001_masked.aln, rep_002_masked.aln, ... (from Step 3)
+# Output: rep_*/masked_unconstrained.treefile, rep_*/masked_constrained.treefile
 
 # ============================================================================
 # Setup
@@ -40,14 +40,12 @@ INPUT_DIR=""
 OUTPUT_DIR=""
 CONFIG_FILE=""
 FORCE_RERUN=false
-STEP3_OUTPUT_DIR=""
 
-while getopts "i:o:c:s:fh" opt; do
+while getopts "i:o:c:fh" opt; do
     case $opt in
         i) INPUT_DIR="$OPTARG" ;;
         o) OUTPUT_DIR="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
-        s) STEP3_OUTPUT_DIR="$OPTARG" ;;
         f) FORCE_RERUN=true ;;
         h) usage ;;
         *) usage ;;
@@ -75,14 +73,12 @@ log "Starting Step 4: Reconstruct Gene Trees"
 log "Output directory: $OUTPUT_DIR"
 
 # Find Step 3 output directory
-if [[ -z "$STEP3_OUTPUT_DIR" ]]; then
-    PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-    STEP3_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step3_* 2>/dev/null | head -1)
+PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
+STEP3_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step3_* 2>/dev/null | head -1)
 
-    if [[ -z "$STEP3_OUTPUT_DIR" ]]; then
-        log "ERROR: Could not find Step 3 output directory"
-        exit 1
-    fi
+if [[ -z "$STEP3_OUTPUT_DIR" ]]; then
+    log "ERROR: Could not find Step 3 output directory"
+    exit 1
 fi
 
 log "Using Step 3 output from: $STEP3_OUTPUT_DIR"
@@ -91,8 +87,7 @@ log "Using Step 3 output from: $STEP3_OUTPUT_DIR"
 # Check Inputs
 # ============================================================================
 
-MODEL1=$(cat "${INPUT_DIR}/model_block1.txt" | tr -d '[:space:]')
-MODEL2=$(cat "${INPUT_DIR}/model_block2.txt" | tr -d '[:space:]')
+MODEL=$(cat "${INPUT_DIR}/model.txt" | tr -d '[:space:]')
 CONSTRAINED_TREE="${INPUT_DIR}/constrained.nwk"
 
 if [[ ! -f "$CONSTRAINED_TREE" ]]; then
@@ -100,26 +95,23 @@ if [[ ! -f "$CONSTRAINED_TREE" ]]; then
     exit 1
 fi
 
-# For mixed alignments, use a combined model or take block1's model
-# (both blocks are present in the mixed alignment)
-COMBINED_MODEL="${MODEL1}"
-log "Using model: $COMBINED_MODEL"
+log "Using model: $MODEL"
 
 # ============================================================================
 # Process Each Replicate
 # ============================================================================
 
 rep_count=0
-total_reps=$(ls -1 "$STEP3_OUTPUT_DIR"/rep_*_mixed.aln 2>/dev/null | wc -l)
+total_reps=$(ls -1 "$STEP3_OUTPUT_DIR"/rep_*_masked.aln 2>/dev/null | wc -l)
 
 log "Found $total_reps replicates to process"
 
-for mixed_aln in "$STEP3_OUTPUT_DIR"/rep_*_mixed.aln; do
-    if [[ ! -f "$mixed_aln" ]]; then
+for masked_aln in "$STEP3_OUTPUT_DIR"/rep_*_masked.aln; do
+    if [[ ! -f "$masked_aln" ]]; then
         continue
     fi
 
-    rep_name=$(basename "$mixed_aln" _mixed.aln)
+    rep_name=$(basename "$masked_aln" _masked.aln)
     ((rep_count++))
 
     if [[ $((rep_count % 10)) -eq 0 ]]; then
@@ -133,12 +125,12 @@ for mixed_aln in "$STEP3_OUTPUT_DIR"/rep_*_mixed.aln; do
     # Build Unconstrained Tree
     # ====================================================================
 
-    UNCONSTRAINED="${REP_OUTPUT_DIR}/mixed_unconstrained"
+    UNCONSTRAINED="${REP_OUTPUT_DIR}/masked_unconstrained"
 
     if [[ ! -f "${UNCONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
-            -s "$mixed_aln" \
-            -m "$COMBINED_MODEL" \
+            -s "$masked_aln" \
+            -m "$MODEL" \
             -bb "$N_BOOTSTRAP" \
             -redo \
             -prefix "$UNCONSTRAINED" \
@@ -154,13 +146,13 @@ for mixed_aln in "$STEP3_OUTPUT_DIR"/rep_*_mixed.aln; do
     # Build Constrained Tree
     # ====================================================================
 
-    CONSTRAINED="${REP_OUTPUT_DIR}/mixed_constrained"
+    CONSTRAINED="${REP_OUTPUT_DIR}/masked_constrained"
 
     if [[ ! -f "${CONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
-            -s "$mixed_aln" \
+            -s "$masked_aln" \
             -te "$CONSTRAINED_TREE" \
-            -m "$COMBINED_MODEL" \
+            -m "$MODEL" \
             -bb "$N_BOOTSTRAP" \
             -redo \
             -prefix "$CONSTRAINED" \
