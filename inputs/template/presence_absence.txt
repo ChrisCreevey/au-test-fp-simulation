@@ -1,0 +1,6 @@
+species	gene_type
+species_A	Parent_gene_1
+species_B	Parent_gene_2
+species_C_fused	fused
+species_D_fused	fused
+species_E	Parent_gene_1

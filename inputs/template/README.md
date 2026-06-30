@@ -26,16 +26,16 @@ ATGCGATCGCGTAGGCTAGGCTAGGCTAGGC   (Both genes - fused)
 
 - **Requirements**:
   - All taxa must be present (gaps indicate missing regions)
-  - Sequence names must match exactly with the constrained tree
+  - Sequence names must match exactly with the constrained tree and presence_absence.txt
   - Alignment should already be trimmed (using trimAl `-gappyout`)
 
 ### `constrained.nwk`
 - **Format**: Newick tree format with branch lengths
 - **Content**: Monophyletic species tree where fused clade is constrained to be monophyletic
 - **Requirements**:
-  - Taxon names must exactly match alignment
+  - Taxon names must exactly match alignment and presence_absence.txt
   - All taxa must be present in the tree
-  - Should include branch lengths (will be re-estimated in Step 1)
+  - Should include branch lengths (will be re-estimated in Step 1 if missing)
 
 ### `model.txt`
 - **Format**: Plain text, one model string
@@ -45,6 +45,23 @@ ATGCGATCGCGTAGGCTAGGCTAGGCTAGGC   (Both genes - fused)
   - `HKY+G4` (HKY model with gamma variation)
   - `JC` (Jukes-Cantor, no parameters)
   - `TVM+G4` (TVM with gamma)
+
+### `presence_absence.txt`
+- **Format**: Tab-separated text with header
+- **Content**: Gene type for each taxon
+- **Valid gene types**:
+  - `Parent_gene_1` — only the first component gene
+  - `Parent_gene_2` — only the second component gene
+  - `fused` — both components concatenated
+  - `absent` — not present in this gene family
+- **Requirements**:
+  - First line: header `species	gene_type`
+  - Taxon names must exactly match those in combined.aln and constrained.nwk
+  - At least one `fused` taxon required
+  - At least one `Parent_gene_1` or `Parent_gene_2` taxon required (non-fused)
+- **Used for**:
+  - Identifying fused taxa in AU test results
+  - Checking monophyly of fused clade in reconstructed trees
 
 ## Preparing Your Data
 
@@ -106,15 +123,18 @@ inputs/
 ├── template/        (keep this as reference)
 │   ├── combined.aln
 │   ├── constrained.nwk
-│   └── model.txt
+│   ├── model.txt
+│   └── presence_absence.txt
 ├── RHG_001/
 │   ├── combined.aln
 │   ├── constrained.nwk
-│   └── model.txt
+│   ├── model.txt
+│   └── presence_absence.txt
 ├── RHG_002/
 │   ├── combined.aln
 │   ├── constrained.nwk
-│   └── model.txt
+│   ├── model.txt
+│   └── presence_absence.txt
 ├── RHG_003/
 │   └── [same structure]
 ...

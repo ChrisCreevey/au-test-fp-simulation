@@ -91,11 +91,39 @@ MODEL=$(cat "${INPUT_DIR}/model.txt" | tr -d '[:space:]')
 log "Using model: $MODEL"
 
 # ============================================================================
+# Read Presence/Absence to Get Fused Taxa
+# ============================================================================
+
+PA_FILE="${INPUT_DIR}/presence_absence.txt"
+
+if [[ ! -f "$PA_FILE" ]]; then
+    log "ERROR: presence_absence.txt not found"
+    exit 1
+fi
+
+# Extract fused taxa (skip header)
+FUSED_TAXA=()
+while IFS=$'\t' read -r species gene_type; do
+    if [[ "$gene_type" == "fused" ]]; then
+        FUSED_TAXA+=("$species")
+    fi
+done < <(tail -n +2 "$PA_FILE")
+
+log "Fused taxa (count: ${#FUSED_TAXA[@]}): ${FUSED_TAXA[@]}"
+
+if [[ ${#FUSED_TAXA[@]} -eq 0 ]]; then
+    log "ERROR: No fused taxa found in presence_absence.txt"
+    exit 1
+fi
+
+# ============================================================================
 # Process Each Replicate
 # ============================================================================
 
 rep_count=0
 au_reject_count=0
+au_reject_no_monophyly=0
+au_reject_other_reasons=0
 
 for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
     rep_name=$(basename "$rep_dir")
@@ -150,20 +178,70 @@ for rep_dir in "$STEP4_OUTPUT_DIR"/rep_*; do
     fi
 
     # Extract AU test p-value
+    au_rejected=0
     if [[ -f "${AU_OUT}.txt" ]]; then
         au_pval=$(grep -oP "AU\s+\K[0-9.]+" "${AU_OUT}.txt" | head -1 || echo "NA")
 
         if [[ "$au_pval" != "NA" ]]; then
-            # Check if p-value < 0.05 (reject monophyly)
+            # Check if p-value < 0.05 (reject constraint)
             if (( $(echo "$au_pval < 0.05" | bc -l) )); then
                 ((au_reject_count++))
+                au_rejected=1
             fi
         fi
     fi
+
+    # ====================================================================
+    # Check Monophyly of Fused Clade in Both Trees
+    # ====================================================================
+
+    # Check unconstrained tree
+    unconstrained_mono=$("$PYTHON_BIN" "$SRC_DIR/check_monophyly.py" \
+        --tree "$UNCONSTRAINED" \
+        --taxa "${FUSED_TAXA[@]}" 2>/dev/null | grep -o '"monophyletic": true' || echo "false")
+
+    # Check constrained tree (should always be monophyletic by definition)
+    constrained_mono=$("$PYTHON_BIN" "$SRC_DIR/check_monophyly.py" \
+        --tree "$CONSTRAINED" \
+        --taxa "${FUSED_TAXA[@]}" 2>/dev/null | grep -o '"monophyletic": true' || echo "false")
+
+    if [[ "$au_rejected" == "1" ]]; then
+        if [[ "$unconstrained_mono" != "false" ]]; then
+            # AU test rejected but fused clade still monophyletic
+            ((au_reject_other_reasons++))
+        else
+            # AU test rejected AND fused clade is NOT monophyletic
+            # This is a true AU test "failure" (false positive of monophyly)
+            ((au_reject_no_monophyly++))
+        fi
+    fi
+
+    # Write monophyly check results
+    {
+        echo "Monophyly Check Results"
+        echo "======================"
+        echo "Fused taxa: ${FUSED_TAXA[@]}"
+        echo ""
+        echo "Constrained tree (should be monophyletic): $constrained_mono"
+        echo "Unconstrained tree: $unconstrained_mono"
+        echo ""
+        echo "AU test p-value: ${au_pval:-NA}"
+        echo "AU test rejected constraint: $([[ $au_rejected -eq 1 ]] && echo 'YES' || echo 'NO')"
+        echo ""
+        if [[ "$au_rejected" == "1" ]]; then
+            if [[ "$unconstrained_mono" != "false" ]]; then
+                echo "AU REJECTION REASON: Topology changed, but fused clade still monophyletic"
+            else
+                echo "AU REJECTION REASON: Fused clade lost monophyly (true signal of polyphyly)"
+            fi
+        fi
+    } > "${REP_OUTPUT_DIR}/monophyly_check.txt"
 done
 
 log "Processed $rep_count replicates for AU testing"
 log "AU test rejections (p < 0.05): $au_reject_count / $rep_count"
+log "  - Rejections due to loss of monophyly: $au_reject_no_monophyly"
+log "  - Rejections for other reasons: $au_reject_other_reasons"
 
 # ============================================================================
 # Calculate and Save Summary
@@ -172,21 +250,37 @@ log "AU test rejections (p < 0.05): $au_reject_count / $rep_count"
 SUMMARY_FILE="${OUTPUT_DIR}/au_test_summary.txt"
 
 {
-    echo "AU Test Summary"
-    echo "==============="
+    echo "AU Test Summary with Monophyly Checking"
+    echo "========================================"
     echo "Total replicates: $rep_count"
-    echo "AU test rejections (p < 0.05): $au_reject_count"
+    echo ""
+    echo "AU Test Results:"
+    echo "  Total rejections (p < 0.05): $au_reject_count"
+    echo "  Rejections with loss of monophyly: $au_reject_no_monophyly"
+    echo "  Rejections for other reasons: $au_reject_other_reasons"
 
     if [[ $rep_count -gt 0 ]]; then
         fp_rate=$(echo "scale=4; 100 * $au_reject_count / $rep_count" | bc)
-        echo "False positive rate: ${fp_rate}%"
+        echo ""
+        echo "False Positive Rates:"
+        echo "  Total FP rate (all rejections): ${fp_rate}%"
+
+        if [[ $au_reject_no_monophyly -gt 0 ]]; then
+            mono_fp_rate=$(echo "scale=4; 100 * $au_reject_no_monophyly / $rep_count" | bc)
+            echo "  Monophyly-loss FP rate (true signal): ${mono_fp_rate}%"
+        fi
+
+        if [[ $au_reject_other_reasons -gt 0 ]]; then
+            other_rate=$(echo "scale=4; 100 * $au_reject_other_reasons / $rep_count" | bc)
+            echo "  Other topology changes: ${other_rate}%"
+        fi
     fi
 
     echo ""
     echo "Interpretation:"
-    echo "  If FP rate ~5%: AU test is correctly calibrated (alpha=0.05)"
-    echo "  If FP rate << 5%: AU test is conservative"
-    echo "  If FP rate >> 5%: AU test may be liberal"
+    echo "  - Expected FP rate for monophyly-loss ~5% if null model is correct"
+    echo "  - Other topology changes may occur independently of monophyly"
+    echo "  - Key metric: monophyly-loss FP rate, not total rejections"
 } > "$SUMMARY_FILE"
 
 log "Summary written to: $SUMMARY_FILE"
