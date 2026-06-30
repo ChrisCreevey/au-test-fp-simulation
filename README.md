@@ -8,13 +8,29 @@ This pipeline simulates single-origin gene fusions with empirically calibrated p
 
 ### 1. Set Up Input Data
 
-Place input data in `inputs/` with the structure shown in `inputs/template/`. Each RHG requires:
-- `block1.aln` — trimmed component 1 alignment (FASTA or Phylip)
-- `block2.aln` — trimmed component 2 alignment
-- `constrained.nwk` — monophyletic species-level tree (Newick)
-- `model_block1.txt` — best-fit model for block 1 (plain text, e.g. "GTR+G4")
-- `model_block2.txt` — best-fit model for block 2
-- `fusion_taxa.txt` — one taxon name per line (taxa carrying the fused gene)
+For each RHG, create a folder in `inputs/` with these **4 required files**:
+
+| File | Format | Description |
+|------|--------|-------------|
+| `combined.aln` | FASTA/Phylip | Combined alignment (first 50% = parent_gene_1, second 50% = parent_gene_2) |
+| `constrained.nwk` | Newick | Monophyletic tree with fused clade constraint |
+| `model.txt` | Text | Substitution model (e.g., `GTR+G4` or `HKY+G4`) |
+| `presence_absence.txt` | TSV | Gene type per taxon (Parent_gene_1, Parent_gene_2, fused, absent) |
+
+**Example structure:**
+```
+inputs/
+├── RHG_001/
+│   ├── combined.aln
+│   ├── constrained.nwk
+│   ├── model.txt
+│   └── presence_absence.txt
+├── RHG_002/
+│   ├── combined.aln
+│   ├── constrained.nwk
+│   ├── model.txt
+│   └── presence_absence.txt
+```
 
 See `docs/INPUTS.md` for detailed format specifications.
 
@@ -30,10 +46,13 @@ Edit `config/pipeline.conf` to set:
 
 ```bash
 # Test on a single RHG
-bash scripts/run_single_rhg.sh inputs/my_rhg_id
+bash scripts/master_pipeline.sh -i inputs/RHG_001
 
-# Or use the main pipeline script
-bash scripts/master_pipeline.sh -c config/pipeline.conf -i inputs/my_rhg_id
+# With custom config file (optional)
+bash scripts/master_pipeline.sh -i inputs/RHG_001 -c config/pipeline.conf
+
+# Force re-run (recalculate branch lengths, redo all steps)
+bash scripts/master_pipeline.sh -i inputs/RHG_001 -f
 ```
 
 ### 4. Run on HPC (Cluster)
@@ -49,12 +68,13 @@ sbatch hpc_templates/submit_pipeline.slurm
 
 The pipeline consists of 6 sequential steps per RHG:
 
-1. **Estimate branch lengths** — Re-estimate on constrained tree with IQTree
-2. **Simulate sequences** — Generate 100 replicates per block with SeqGen
-3. **Apply single-origin mask** — Concatenate blocks for fusion taxa, keep separate for others
-4. **Reconstruct gene trees** — IQTree on each simulated block (100 replicates × 2 blocks)
-5. **Run AU test** — Test monophyletic constraint for each replicate
-6. **Summarize results** — Compute false positive rate and generate null distribution
+1. **Estimate branch lengths** — Re-estimate on constrained tree with IQTree (uses combined.aln)
+2. **Calculate consensus** — Majority-rule consensus from combined.aln (ancestral sequence)
+3. **Simulate sequences** — Generate 100 replicates with SeqGen from consensus ancestor
+4. **Apply gap pattern** — Insert original gap pattern from combined.aln into simulated sequences
+5. **Reconstruct gene trees** — IQTree unconstrained and constrained per replicate
+6. **Run AU test + monophyly check** — Test constraint and verify fused clade monophyly
+7. **Summarize results** — Compute false positive rate, categorize by monophyly status
 
 See `docs/PIPELINE.md` for detailed step-by-step descriptions.
 
