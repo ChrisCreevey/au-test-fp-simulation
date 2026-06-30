@@ -111,7 +111,7 @@ def read_phylip_seqgen(filename: str) -> Dict[int, Dict[str, str]]:
     replicates = {}
     current_seqs = {}
     current_taxon = None
-    rep_num = 1
+    rep_num = 0
 
     try:
         with open(filename, 'r') as f:
