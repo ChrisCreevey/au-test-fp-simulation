@@ -156,62 +156,57 @@ def parse_newick_simple(newick_str: str) -> TreeNode:
     return root
 
 
-def is_monophyletic(tree: TreeNode, target_taxa: Set[str]) -> bool:
+def is_monophyletic(tree: TreeNode, target_taxa: Set[str]) -> Optional[bool]:
     """
-    Check if target_taxa form a monophyletic clade.
+    Check if target_taxa form a "clan" - the unrooted analogue of a
+    monophyletic clade (Wilkinson et al. 2007, "Of clades and clans").
 
-    Returns True if:
-      - All target_taxa are present in the tree
-      - They form a complete, isolated subtree
-      - No non-target taxa are nested within them
+    A rooted-descendant-set check (does some node's subtree equal exactly
+    target_taxa?) is only correct if the tree happens to be rooted outside
+    the target clade. ML tools like IQ-TREE write out arbitrarily rooted
+    trees, so that assumption can't be relied on: if the root falls inside
+    the true clade, no single node's descendant set will equal target_taxa
+    even though the taxa are still separated from everything else by one
+    edge in the underlying unrooted tree.
+
+    Instead, we test every internal edge's bipartition (a node's descendant
+    set vs. its complement). Both sides of a bipartition are checked because
+    rerooting can only reshuffle the side of the tree containing the root -
+    the side that doesn't contain the root is always left as a clean
+    subtree, so it always shows up as either a node's descendant set or its
+    complement. This makes the test rooting-invariant.
+
+    Returns:
+      - True if the (present) target taxa form a clan
+      - False if they are violated (found in the tree but not grouped together)
+      - None if fewer than 2 target taxa are present in the tree (untestable,
+        mirroring the "?" result in clan_check)
     """
 
     if not target_taxa:
         return False
 
-    # Get all taxa in tree
     all_taxa = tree.get_all_descendants()
 
-    # Check if all target taxa exist
-    if not target_taxa.issubset(all_taxa):
-        return False
-
-    # Find the MRCA (most recent common ancestor) of target taxa
-    # by checking each node
-    def find_mrca(node: TreeNode) -> Optional[TreeNode]:
-        """Find the lowest node that has all target taxa as descendants."""
-        node_taxa = node.get_all_descendants()
-
-        if not target_taxa.issubset(node_taxa):
-            return None
-
-        # Check if this node is the MRCA
-        # (all target taxa are here, and all descendants are target taxa)
-        if node_taxa == target_taxa:
-            return node
-
-        # Check children
-        mrcas = []
-        for child in node.children:
-            mrca = find_mrca(child)
-            if mrca:
-                mrcas.append(mrca)
-
-        if mrcas:
-            # Return the first one found (there should be only one)
-            return mrcas[0]
-
+    # Only test the subset of target taxa actually present in this tree
+    present_target = target_taxa & all_taxa
+    if len(present_target) < 2:
         return None
 
-    mrca = find_mrca(tree)
-
-    if mrca is None:
+    def matches_split(node: TreeNode) -> bool:
+        node_taxa = node.get_all_descendants()
+        if node_taxa == present_target:
+            return True
+        if (all_taxa - node_taxa) == present_target:
+            return True
         return False
 
-    # Check if MRCA's descendants are exactly the target taxa
-    mrca_taxa = mrca.get_all_descendants()
+    def walk(node: TreeNode) -> bool:
+        if matches_split(node):
+            return True
+        return any(walk(child) for child in node.children)
 
-    return mrca_taxa == target_taxa
+    return walk(tree)
 
 
 def main():
@@ -257,7 +252,8 @@ def main():
     }
 
     print(json.dumps(result))
-    sys.exit(0 if is_mono else 1)
+    # Exit codes: 0 = clan present, 1 = clan violated, 2 = untestable (< 2 taxa present)
+    sys.exit(0 if is_mono is True else (2 if is_mono is None else 1))
 
 
 if __name__ == '__main__':
