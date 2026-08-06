@@ -31,7 +31,41 @@ A worked example lives in [examples/](examples/); a self-contained copy is also 
 
 See [docs/INPUTS.md](docs/INPUTS.md) for the full format specification.
 
-### 2. Configure the pipeline
+### 2. Using your own data
+
+The fastest way to get real data into the right shape is to start from the provided template:
+
+```bash
+cp -r inputs/template inputs/<your_gene_family_name>
+# then edit the 4 files inside with your real data
+```
+
+Each gene family (RHG) gets its own directory, wherever you like — `inputs/<name>/` is just the convention `master_pipeline.sh -i <dir>` and the templates use; the path is passed explicitly with `-i`, so it isn't hardcoded. For many gene families, create one directory per family, e.g. `inputs/RHG_001/`, `inputs/RHG_002/`, ...
+
+**What each file needs to contain, precisely:**
+
+- **`combined.aln`** — one alignment per gene family spanning *both* parent-gene regions. A taxon that only has parent gene 1 is gap-filled (`-`) across the parent-gene-2 columns, and vice versa; a fused taxon has real sequence across both regions with no internal gap block. Sequence names must match exactly between this file, `constrained.nwk`, and `presence_absence.txt`. Trim it first (e.g. trimAl `-gappyout`) — the pipeline does not trim for you.
+- **`constrained.nwk`** — a Newick tree with the fused clade already constrained to be monophyletic. Branch lengths are optional: if present, Step 1 is skipped; if absent, Step 1 estimates them from `combined.aln` (or force re-estimation with `-f`).
+- **`model.txt`** — a single line with the IQ-TREE model string for `combined.aln` (e.g. `Best-fit model according to BIC: GTR+G4` from an IQ-TREE `.iqtree` log → write `GTR+G4`). Case-sensitive, no rate matrix or frequency values, and amino acid vs. DNA models must match your alignment's data type.
+- **`presence_absence.txt`** — a TSV (`species<TAB>gene_type`, header row included) covering every taxon in `combined.aln`, with `gene_type` one of `Parent_gene_1`, `Parent_gene_2`, `fused`, `absent`. This is what Step 5 uses to know which taxa should form the fused clade when checking monophyly.
+
+If you're converting from a typical two-block real analysis (`block1.aln` + `block2.aln`), [docs/INPUTS.md](docs/INPUTS.md) has a ready-to-run Biopython snippet for building `combined.aln` from the two blocks, plus a one-liner for pulling the model string out of an IQ-TREE log.
+
+**Before running the pipeline**, validate the directory:
+
+```bash
+python3 src/validate_inputs.py inputs/<your_gene_family_name>
+```
+
+This checks the required files exist, the alignment is readable, taxon names match between the alignment and tree, the tree is valid Newick, the model string is valid IQ-TREE notation, and the gap pattern actually shows a mix of fused and parent-only taxa. Fix any reported errors before proceeding — `master_pipeline.sh` also runs this validation automatically (governed by `VALIDATE_INPUTS`/`VALIDATE_STRICT` in `config/pipeline.conf`).
+
+Then point the pipeline at your directory as normal:
+
+```bash
+bash scripts/master_pipeline.sh -i inputs/<your_gene_family_name>
+```
+
+### 3. Configure the pipeline
 
 Edit [config/pipeline.conf](config/pipeline.conf):
 
