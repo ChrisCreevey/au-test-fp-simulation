@@ -70,6 +70,9 @@ fi
 
 source "$CONFIG_FILE"
 
+# Set OUTPUT_DIR from config (DEFAULT_OUTPUT_DIR)
+OUTPUT_DIR="${DEFAULT_OUTPUT_DIR}"
+
 # Override with command-line if specified
 FORCE_RERUN="${FORCE_RERUN:-${FORCE_RERUN:-false}}"
 

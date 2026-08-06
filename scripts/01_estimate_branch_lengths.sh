@@ -127,6 +127,7 @@ else
         -s "$COMBINED_ALN" \
         -te "$CONSTRAINED_TREE" \
         -m "$MODEL" \
+        -T "${IQTREE_THREADS_PER_JOB:-1}" \
         -keep-ident \
         -redo \
         -prefix "$OUTPUT" \

@@ -98,73 +98,82 @@ fi
 log "Using model: $MODEL"
 
 # ============================================================================
-# Process Each Replicate
+# Process Each Replicate (in parallel — replicates are independent)
 # ============================================================================
+#
+# Note: the unconstrained tree search intentionally omits -bb/UFBoot. Bootstrap
+# support values are not consumed anywhere downstream (monophyly checking only
+# looks at tree topology, and the AU test in Step 5 uses its own -zb RELL
+# bootstrap), so computing UFBoot here was pure wasted compute.
 
-rep_count=0
+JOBS="${REPLICATE_JOBS:-${HPC_THREADS:-1}}"
+IQTREE_THREADS_PER_JOB="${IQTREE_THREADS_PER_JOB:-1}"
+
 total_reps=$(ls -1 "$STEP3_OUTPUT_DIR"/rep_*_masked.aln 2>/dev/null | wc -l)
+log "Found $total_reps replicates to process (running up to $JOBS concurrently)"
 
-log "Found $total_reps replicates to process"
-
-for masked_aln in "$STEP3_OUTPUT_DIR"/rep_*_masked.aln; do
-    if [[ ! -f "$masked_aln" ]]; then
-        continue
-    fi
-
+process_one_replicate() {
+    local masked_aln="$1"
+    local rep_name
     rep_name=$(basename "$masked_aln" _masked.aln)
-    ((rep_count++))
 
-    if [[ $((rep_count % 10)) -eq 0 ]]; then
-        log "Processing replicate $rep_count / $total_reps"
-    fi
-
-    REP_OUTPUT_DIR="${OUTPUT_DIR}/${rep_name}"
+    local REP_OUTPUT_DIR="${OUTPUT_DIR}/${rep_name}"
     mkdir -p "$REP_OUTPUT_DIR"
+    local REP_LOG="${REP_OUTPUT_DIR}/step4_rep.log"
 
-    # ====================================================================
-    # Build Unconstrained Tree
-    # ====================================================================
-
-    UNCONSTRAINED="${REP_OUTPUT_DIR}/masked_unconstrained"
-
+    local UNCONSTRAINED="${REP_OUTPUT_DIR}/masked_unconstrained"
     if [[ ! -f "${UNCONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
             -s "$masked_aln" \
             -m "$MODEL" \
-            -bb "$N_BOOTSTRAP" \
+            -T "$IQTREE_THREADS_PER_JOB" \
             -redo \
             --prefix "$UNCONSTRAINED" \
-            >> "$LOG" 2>&1
+            > "$REP_LOG" 2>&1
 
         if [[ ! -f "${UNCONSTRAINED}.treefile" ]]; then
-            log "ERROR: IQTree failed for unconstrained tree of $rep_name"
-            exit 1
+            echo "FAILED $rep_name unconstrained"
+            return 1
         fi
     fi
 
-    # ====================================================================
-    # Build Constrained Tree
-    # ====================================================================
-
-    CONSTRAINED="${REP_OUTPUT_DIR}/masked_constrained"
-
+    local CONSTRAINED="${REP_OUTPUT_DIR}/masked_constrained"
     if [[ ! -f "${CONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
-        # Note: Cannot use -bb with -te (bootstrap incompatible with tree constraint)
-        # Just evaluate the constrained topology without bootstrap
         $IQTREE_BIN \
             -s "$masked_aln" \
             -te "$CONSTRAINED_TREE" \
             -m "$MODEL" \
+            -T "$IQTREE_THREADS_PER_JOB" \
             -redo \
             --prefix "$CONSTRAINED" \
-            >> "$LOG" 2>&1
+            >> "$REP_LOG" 2>&1
 
         if [[ ! -f "${CONSTRAINED}.treefile" ]]; then
-            log "ERROR: IQTree failed for constrained tree of $rep_name"
-            exit 1
+            echo "FAILED $rep_name constrained"
+            return 1
         fi
     fi
-done
+
+    echo "OK $rep_name"
+}
+export -f process_one_replicate
+export IQTREE_BIN MODEL CONSTRAINED_TREE FORCE_RERUN OUTPUT_DIR IQTREE_THREADS_PER_JOB
+
+RESULTS_FILE="${OUTPUT_DIR}/step4_results.txt"
+: > "$RESULTS_FILE"
+
+ls "$STEP3_OUTPUT_DIR"/rep_*_masked.aln 2>/dev/null | \
+    xargs -P "$JOBS" -I{} bash -c 'process_one_replicate "$@"' _ {} \
+    >> "$RESULTS_FILE" || true
+
+rep_count=$(grep -c '^OK\|^FAILED' "$RESULTS_FILE" || true)
+fail_count=$(grep -c '^FAILED' "$RESULTS_FILE" || true)
+
+if [[ $fail_count -gt 0 ]]; then
+    log "ERROR: $fail_count of $rep_count replicate(s) failed tree reconstruction:"
+    grep '^FAILED' "$RESULTS_FILE" | while read -r line; do log "  $line"; done
+    exit 1
+fi
 
 log "Processed $rep_count replicates"
 log "SUCCESS: Step 4 completed"
