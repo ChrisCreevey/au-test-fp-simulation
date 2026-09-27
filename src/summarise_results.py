@@ -31,6 +31,12 @@ COLUMNS = [
     "Mean_AU_Pvalue",
     "Mean_Tree_Length",
     "SD_Tree_Length",
+    "Null_DeltaLogL_Min",
+    "Null_DeltaLogL_Mean",
+    "Null_DeltaLogL_Max",
+    "Real_DeltaLogL",
+    "N_Null_As_Extreme",
+    "Permutation_P_Upper",
 ]
 
 
@@ -57,11 +63,38 @@ def to_float(value: str) -> Optional[float]:
         return None
 
 
-def summarize_per_rhg(step5_output_dir: Path, rhg_id: str) -> dict:
+def read_real_delta_logl(path: Path) -> Optional[float]:
+    """Read DELTA_LOGL= from a real_delta_logl.txt (see
+    scripts/real_data_delta_logl.sh). Returns None if missing/unreadable --
+    the permutation comparison is skipped, not fatal, since it requires a
+    real, expensive unconstrained search on real data as a prerequisite."""
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines():
+        if line.startswith("DELTA_LOGL="):
+            try:
+                return float(line.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
+def summarize_per_rhg(step5_output_dir: Path, rhg_id: str, real_delta_logl: Optional[float] = None) -> dict:
     """
     Summarize results for one RHG across all replicates by reading the
     per-replicate RESULT/SKIP lines Step 5 already wrote to step5_results.txt
-    (rejected=, reason=, mono=, ntaxa=, nsites=, treelen=, pval=).
+    (rejected=, reason=, mono=, ntaxa=, nsites=, treelen=, pval=, deltalogl=).
+
+    If real_delta_logl is given (the REAL data's own observed constrained-vs-
+    unconstrained logL gap, from scripts/real_data_delta_logl.sh), also
+    reports a permutation-style comparison: what fraction of this domain's
+    null replicates produced a delta-logL at least as extreme as the real
+    one, purely from simulating under a KNOWN-true single-origin scenario.
+    This is a more direct, more informative test than counting nominal AU
+    rejections -- it preserves the actual magnitude of evidence rather than
+    a binary threshold call, and (unlike the AU p-value) doesn't depend on
+    the RELL bootstrap count (see the "-zb 10000" warning IQTree itself
+    printed with the current default of 1000).
     """
 
     results_file = step5_output_dir / "step5_results.txt"
@@ -75,6 +108,7 @@ def summarize_per_rhg(step5_output_dir: Path, rhg_id: str) -> dict:
     nsites_values = []
     pvals = []
     treelens = []
+    deltalogls = []
 
     if results_file.exists():
         for line in results_file.read_text().splitlines():
@@ -114,6 +148,10 @@ def summarize_per_rhg(step5_output_dir: Path, rhg_id: str) -> dict:
             treelen = to_float(fields.get("treelen"))
             if treelen is not None:
                 treelens.append(treelen)
+
+            deltalogl = to_float(fields.get("deltalogl"))
+            if deltalogl is not None:
+                deltalogls.append(deltalogl)
     else:
         logging.warning(f"step5_results.txt not found in {step5_output_dir}")
 
@@ -121,6 +159,19 @@ def summarize_per_rhg(step5_output_dir: Path, rhg_id: str) -> dict:
 
     def pct(n):
         return 100.0 * n / n_replicates if n_replicates > 0 else None
+
+    null_min = min(deltalogls) if deltalogls else None
+    null_mean = statistics.mean(deltalogls) if deltalogls else None
+    null_max = max(deltalogls) if deltalogls else None
+
+    n_as_extreme = None
+    perm_p_upper = None
+    if real_delta_logl is not None and deltalogls:
+        n_as_extreme = sum(1 for d in deltalogls if d >= real_delta_logl)
+        # +1/+1 continuity correction: with finite replicates, "0 as extreme"
+        # doesn't mean p=0, it means p is bounded above by 1/(n+1) -- this is
+        # the standard permutation-test upper bound, not a point estimate.
+        perm_p_upper = (n_as_extreme + 1) / (len(deltalogls) + 1)
 
     return {
         "RHG_ID": rhg_id,
@@ -137,6 +188,12 @@ def summarize_per_rhg(step5_output_dir: Path, rhg_id: str) -> dict:
         "Mean_AU_Pvalue": statistics.mean(pvals) if pvals else None,
         "Mean_Tree_Length": statistics.mean(treelens) if treelens else None,
         "SD_Tree_Length": statistics.stdev(treelens) if len(treelens) > 1 else (0.0 if treelens else None),
+        "Null_DeltaLogL_Min": null_min,
+        "Null_DeltaLogL_Mean": null_mean,
+        "Null_DeltaLogL_Max": null_max,
+        "Real_DeltaLogL": real_delta_logl,
+        "N_Null_As_Extreme": n_as_extreme,
+        "Permutation_P_Upper": perm_p_upper,
     }
 
 
@@ -189,6 +246,9 @@ def main():
                         help="Output directory for summary files")
     parser.add_argument("--rhg-id", required=True,
                         help="RHG identifier")
+    parser.add_argument("--real-delta-logl-file", default=None,
+                        help="Optional real_delta_logl.txt (from scripts/real_data_delta_logl.sh) "
+                             "for the permutation-style comparison against the null distribution")
     parser.add_argument("--log", default=None,
                         help="Log file path")
 
@@ -216,7 +276,16 @@ def main():
 
     logging.info(f"Summarizing results for {args.rhg_id}")
 
-    results = summarize_per_rhg(step5_dir, args.rhg_id)
+    real_delta_logl = None
+    if args.real_delta_logl_file:
+        real_delta_logl = read_real_delta_logl(Path(args.real_delta_logl_file))
+        if real_delta_logl is None:
+            logging.warning(f"Could not read real delta-logL from {args.real_delta_logl_file}; "
+                             f"permutation comparison will be NA")
+        else:
+            logging.info(f"Real delta-logL: {real_delta_logl}")
+
+    results = summarize_per_rhg(step5_dir, args.rhg_id, real_delta_logl)
 
     tsv_file = output_dir / "results.tsv"
     summary_file = output_dir / "summary.txt"

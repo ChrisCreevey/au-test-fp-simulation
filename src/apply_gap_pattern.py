@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 """
-Apply gap pattern from original alignment to simulated sequences.
+Apply gap pattern from one domain's original alignment to its simulated
+replicates.
 
-The original alignment contains gaps that indicate which regions each taxon has.
-This script:
-1. Reads the original alignment to extract gap patterns per taxon
-2. Reads SeqGen output (ungapped simulated sequences)
-3. Inserts gaps at the same positions as in the original
-4. Outputs masked alignments that mimic the original structure
-
-This preserves the real gene distribution (which taxa have parent_gene_1,
-parent_gene_2, or both) while using simulated sequences.
+The original per-domain alignment (e.g. F100058_Domain1.trim) contains
+ordinary indel gaps -- the normal product of aligning real, variable-length
+sequences. SeqGen/AliSim simulate full alignment-length, ungapped-but-
+POSITIONALLY-SYNCHRONIZED sequences for every taxon (column i in every
+taxon's output descends from the same ancestral column i), so this script:
+1. Reads the original domain alignment to extract each taxon's gap pattern
+2. Reads the simulator's FASTA output (N_REPLICATES datasets, one
+   contiguous block of records per replicate)
+3. Overlays each taxon's real gap pattern onto its simulated sequence, IN
+   PLACE at the same column positions (see apply_gap_pattern()'s docstring
+   for a critical bug this replaced: an earlier version extracted a
+   taxon's first N simulated characters instead of the characters actually
+   at its real positions, silently misaligning almost every comparison
+   between taxa with different gap counts)
+4. Writes one masked alignment per replicate
 """
 
 import sys
 import argparse
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -56,105 +64,107 @@ def extract_gap_pattern(sequence: str) -> List[int]:
     return [i for i, char in enumerate(sequence) if char == '-']
 
 
-def remove_gaps(sequence: str) -> str:
-    """Remove all gaps from sequence."""
-    return sequence.replace('-', '')
-
-
-def apply_gap_pattern(ungapped_seq: str, gap_positions: List[int], aln_length: int) -> str:
+def apply_gap_pattern(sim_seq: str, gap_positions: List[int], aln_length: int) -> str:
     """
-    Insert gaps into ungapped sequence at specified positions.
+    Overlay a taxon's real gap pattern onto its simulated sequence.
 
-    The ungapped_seq represents a full-length alignment sequence (may include gaps
-    from SeqGen that represent regions not present in this taxon). We extract only
-    the non-gap positions and reconstruct the sequence with the correct gap pattern.
+    CRITICAL: SeqGen/AliSim output is already full alignment-length and
+    POSITIONALLY SYNCHRONIZED across every taxon -- position i in every
+    taxon's simulated sequence descends from the same ancestral position i,
+    evolved via that position's own site-specific rate. This is NOT a
+    variable-length "ungapped" sequence needing gaps reinserted; it is
+    already the right length and already in the right column order.
+
+    An earlier version of this function treated sim_seq as if it needed
+    gaps re-inserted -- extracting sim_seq's FIRST N characters (N = this
+    taxon's real non-gap count) and placing THOSE at the taxon's real
+    non-gap positions. That silently misaligns almost every comparison
+    between two taxa with different gap counts (comparing arbitrary,
+    evolutionarily-unrelated column pairs instead of the same real
+    position), which for a sparse/mosaic alignment (most taxa cover
+    different, only partially-overlapping regions) corrupts nearly every
+    pairwise comparison. Confirmed directly: at a branch-scale near zero
+    (sequences should be ~100% identical to the ancestor and each other),
+    the old logic gave ~4% identity between two taxa with different gap
+    counts; positionally-correct masking gives the expected ~98%.
 
     Args:
-        ungapped_seq: Full-length sequence from SeqGen (same length as original alignment)
-        gap_positions: List of positions in original alignment that have gaps
+        sim_seq: Simulated sequence, same length as the original alignment,
+            already positionally aligned to it (index i in sim_seq
+            corresponds to alignment column i)
+        gap_positions: Positions in the original alignment that are gaps
+            for this taxon
         aln_length: Length of the original alignment
 
     Returns:
-        Sequence with gaps inserted at the correct positions
+        sim_seq with '-' at this taxon's real gap positions, unchanged
+        elsewhere -- a direct positional overlay, nothing extracted or
+        reordered.
     """
-    # Determine non-gap positions (positions that should have sequence)
-    non_gap_positions = [i for i in range(aln_length) if i not in gap_positions]
     gap_pos_set = set(gap_positions)
-
-    # Extract only the sequence from non-gap positions of the input
-    actual_seq = []
-    for i in range(len(ungapped_seq)):
-        if i < len(non_gap_positions):
-            # Use characters from ungapped_seq in order
-            actual_seq.append(ungapped_seq[i])
-
-    # Now reconstruct with proper gap pattern
-    result = []
-    seq_idx = 0
-
-    for pos in range(aln_length):
-        if pos in gap_pos_set:
-            result.append('-')
-        else:
-            if seq_idx < len(actual_seq):
-                result.append(actual_seq[seq_idx])
-                seq_idx += 1
-
-    return ''.join(result)
+    return ''.join('-' if pos in gap_pos_set else sim_seq[pos] for pos in range(aln_length))
 
 
-def read_phylip_seqgen(filename: str) -> Dict[int, Dict[str, str]]:
+def read_fasta_seqgen_records(filename: str) -> List[Tuple[str, str]]:
     """
-    Read SeqGen output (Phylip format with multiple datasets).
-    Returns: {replicate_number: {taxon: sequence}}
+    Read SeqGen's FASTA output as an ORDERED list of (taxon, sequence)
+    records, preserving duplicates. SeqGen (this build's default output
+    format, confirmed by direct testing -- not the Phylip-with-headers
+    format an earlier version of this script assumed) writes N_REPLICATES
+    datasets back to back, each a contiguous block of one record per taxon,
+    always in the same fixed tree-traversal order.
     """
-    replicates = {}
-    current_seqs = {}
+    records = []
     current_taxon = None
-    rep_num = 0
+    current_seq = []
 
-    try:
-        with open(filename, 'r') as f:
-            lines = f.readlines()
+    with open(filename, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_taxon is not None:
+                    records.append((current_taxon, ''.join(current_seq)))
+                current_taxon = line[1:].split()[0]
+                current_seq = []
+            else:
+                current_seq.append(line)
+        if current_taxon is not None:
+            records.append((current_taxon, ''.join(current_seq)))
 
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
+    return records
 
-            # Header line: <ntaxa> <nchars>
-            if line and not line[0].isspace() and ' ' in line:
-                parts = line.split()
-                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    if current_seqs:
-                        replicates[rep_num - 1] = current_seqs
-                    rep_num += 1
-                    current_seqs = {}
-                    current_taxon = None
-                    i += 1
-                    continue
 
-            # Sequence line
-            if line:
-                if not line[0].isspace():
-                    # New taxon
-                    parts = line.split(None, 1)
-                    if len(parts) == 2:
-                        current_taxon = parts[0]
-                        current_seqs[current_taxon] = parts[1]
-                else:
-                    # Continuation of previous taxon
-                    if current_taxon:
-                        current_seqs[current_taxon] += line.strip()
+def group_into_replicates(records: List[Tuple[str, str]], n_taxa: int,
+                           expected_taxa: set) -> Dict[int, Dict[str, str]]:
+    """
+    Chunk an ordered (taxon, seq) record list into per-replicate dicts,
+    n_taxa records per replicate. Validates each block's taxon set matches
+    the original alignment's -- if SeqGen ever changed its per-replicate
+    ordering this would silently mix taxa across replicates, so we fail
+    loudly instead.
+    Returns: {replicate_index (0-based): {taxon: sequence}}
+    """
+    if n_taxa == 0:
+        raise ValueError("n_taxa is 0, cannot chunk into replicates")
+    if len(records) % n_taxa != 0:
+        raise ValueError(
+            f"SeqGen output has {len(records)} sequences, not a multiple of "
+            f"n_taxa={n_taxa} -- cannot cleanly chunk into replicate blocks"
+        )
 
-            i += 1
-
-        # Add last replicate
-        if current_seqs:
-            replicates[rep_num - 1] = current_seqs
-
-    except Exception as e:
-        logging.error(f"Error reading SeqGen output {filename}: {e}")
-        return None
+    n_reps = len(records) // n_taxa
+    replicates = {}
+    for rep_idx in range(n_reps):
+        block = dict(records[rep_idx * n_taxa:(rep_idx + 1) * n_taxa])
+        if set(block.keys()) != expected_taxa:
+            raise ValueError(
+                f"Replicate {rep_idx} taxon set doesn't match the original "
+                f"alignment's -- SeqGen output isn't in the fixed "
+                f"per-replicate blocks this script assumes"
+            )
+        replicates[rep_idx] = block
 
     return replicates
 
@@ -176,7 +186,7 @@ def main():
     parser.add_argument('--original-aln', required=True,
                         help='Original alignment with gap patterns')
     parser.add_argument('--simulated-seqs', required=True,
-                        help='SeqGen simulated sequences (ungapped)')
+                        help='SeqGen simulated sequences (ungapped, FASTA, N_REPLICATES blocks)')
     parser.add_argument('--output-dir', required=True,
                         help='Output directory for masked alignments')
     parser.add_argument('--n-replicates', type=int, default=100,
@@ -199,6 +209,8 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO, format='%(message)s')
 
+    start_time = time.time()
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -216,15 +228,12 @@ def main():
 
     # Extract gap patterns per taxon
     gap_patterns = {}
-    ungapped_seqs = {}
 
     for taxon, seq in original.items():
         gap_patterns[taxon] = extract_gap_pattern(seq)
-        ungapped_seqs[taxon] = remove_gaps(seq)
 
     logging.info(f"Loaded {len(original)} taxa from original alignment")
-    logging.info(f"Alignment length (with gaps): {len(list(original.values())[0])}")
-    logging.info(f"Alignment length (ungapped): {len(list(ungapped_seqs.values())[0])}")
+    logging.info(f"Alignment length: {len(list(original.values())[0])}")
 
     # ========================================================================
     # Load SeqGen Output
@@ -232,15 +241,26 @@ def main():
 
     logging.info(f"Reading SeqGen output...")
 
-    sim_reps = read_phylip_seqgen(args.simulated_seqs)
+    records = read_fasta_seqgen_records(args.simulated_seqs)
 
-    if not sim_reps:
+    if not records:
         logging.error("Failed to read SeqGen output")
+        sys.exit(1)
+
+    try:
+        sim_reps = group_into_replicates(records, len(original), set(original.keys()))
+    except ValueError as e:
+        logging.error(f"Failed to group SeqGen output into replicates: {e}")
         sys.exit(1)
 
     logging.info(f"Loaded {len(sim_reps)} replicates from SeqGen")
 
-    n_reps = min(len(sim_reps), args.n_replicates)
+    if len(sim_reps) != args.n_replicates:
+        logging.warning(
+            f"Expected {args.n_replicates} replicates, SeqGen produced {len(sim_reps)}"
+        )
+
+    n_reps = len(sim_reps)
     logging.info(f"Processing {n_reps} replicates")
 
     # ========================================================================
@@ -292,12 +312,15 @@ def main():
     # Report Results
     # ========================================================================
 
+    elapsed = time.time() - start_time
+
     logging.info("")
     logging.info("=" * 60)
     logging.info(f"Gap Pattern Application Complete")
     logging.info(f"  Success: {success_count} / {n_reps}")
     logging.info(f"  Failed: {fail_count} / {n_reps}")
     logging.info(f"  Output files: rep_NNN_masked.aln")
+    logging.info(f"Time taken: {elapsed:.6f} seconds")
 
     if fail_count > 0:
         sys.exit(1)

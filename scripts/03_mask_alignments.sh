@@ -1,9 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# Step 3: Apply gap pattern from original alignment to simulated sequences
-# Input: simulated_combined.phy (ungapped), original combined.aln (with gaps)
-# Output: rep_001_masked.aln, rep_002_masked.aln, ... (with gap pattern applied)
+# Step 3: Apply indel-gap pattern from one domain's original alignment to
+# its simulated replicates.
+#
+# Input:  the domain's original alignment (for gap positions) + Step 2's
+#         AliSim output directory
+# Output: rep_001_masked.aln, rep_002_masked.aln, ... (one per replicate)
 
 # ============================================================================
 # Setup
@@ -14,16 +17,17 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") -i <input_dir> -o <output_dir> -c <config_file> [-f]
+Usage: $(basename "$0") -a <alignment> -s <step2_output_dir> -o <output_dir> -c <config_file> [-f]
 
 Required:
-  -i <input_dir>        Input RHG directory
-  -o <output_dir>       Output directory for step 3 results
-  -c <config_file>      Config file
+  -a <file>   Domain alignment (e.g. F100058_Domain1.trim) -- source of gap pattern
+  -s <dir>    Step 2 output directory (contains simulated_domain.fa)
+  -o <dir>    Output directory for step 3 results
+  -c <file>   Config file
 
 Optional:
-  -f                    Force re-run
-  -h                    Show help
+  -f          Force re-run
+  -h          Show help
 
 EOF
     exit 1
@@ -33,14 +37,16 @@ EOF
 # Parse Arguments
 # ============================================================================
 
-INPUT_DIR=""
+ALIGNMENT=""
+STEP2_OUTPUT_DIR=""
 OUTPUT_DIR=""
 CONFIG_FILE=""
 FORCE_RERUN=false
 
-while getopts "i:o:c:fh" opt; do
+while getopts "a:s:o:c:fh" opt; do
     case $opt in
-        i) INPUT_DIR="$OPTARG" ;;
+        a) ALIGNMENT="$OPTARG" ;;
+        s) STEP2_OUTPUT_DIR="$OPTARG" ;;
         o) OUTPUT_DIR="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
         f) FORCE_RERUN=true ;;
@@ -49,7 +55,8 @@ while getopts "i:o:c:fh" opt; do
     esac
 done
 
-if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" || -z "$CONFIG_FILE" ]]; then
+if [[ -z "$ALIGNMENT" || -z "$STEP2_OUTPUT_DIR" || -z "$OUTPUT_DIR" || -z "$CONFIG_FILE" ]]; then
+    echo "Error: -a, -s, -o, and -c are all required"
     usage
 fi
 
@@ -57,7 +64,11 @@ fi
 # Load Configuration
 # ============================================================================
 
+CLI_FORCE_RERUN="$FORCE_RERUN"
 source "$CONFIG_FILE"
+if [[ "$CLI_FORCE_RERUN" == "true" ]]; then
+    FORCE_RERUN=true
+fi
 mkdir -p "$OUTPUT_DIR"
 
 LOG="${OUTPUT_DIR}/step3.log"
@@ -66,36 +77,36 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $@" | tee -a "$LOG"
 }
 
-log "Starting Step 3: Apply Gap Pattern from Original Alignment"
+log "Starting Step 3: Apply Gap Pattern from Original Domain Alignment"
+log "Alignment: $ALIGNMENT"
 log "Output directory: $OUTPUT_DIR"
-
-# Find Step 2 output directory
-PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-STEP2_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step2_* 2>/dev/null | head -1)
-
-if [[ -z "$STEP2_OUTPUT_DIR" ]]; then
-    log "ERROR: Could not find Step 2 output directory"
-    exit 1
-fi
-
-log "Using Step 2 output from: $STEP2_OUTPUT_DIR"
 
 # ============================================================================
 # Check Inputs
 # ============================================================================
 
-ORIGINAL_ALN="${INPUT_DIR}/combined.aln"
-SIM="${STEP2_OUTPUT_DIR}/simulated_combined.phy"
+SIM="${STEP2_OUTPUT_DIR}/simulated_domain.fa"
 
-for file in "$ORIGINAL_ALN" "$SIM"; do
+for file in "$ALIGNMENT" "$SIM"; do
     if [[ ! -f "$file" ]]; then
         log "ERROR: Required file not found: $file"
         exit 1
     fi
 done
 
-log "Original alignment: $ORIGINAL_ALN"
+log "Original alignment: $ALIGNMENT"
 log "Simulated sequences: $SIM"
+
+# ============================================================================
+# Skip if already done (unless forced)
+# ============================================================================
+
+existing_count=$(ls -1 "$OUTPUT_DIR"/rep_*_masked.aln 2>/dev/null | wc -l) || true
+if [[ "$existing_count" -gt 0 && "$FORCE_RERUN" != "true" ]]; then
+    log "Found $existing_count existing masked alignment(s), skipping (use -f to force)"
+    log "SUCCESS: Step 3 skipped"
+    exit 0
+fi
 
 # ============================================================================
 # Call Python Masking Script
@@ -104,7 +115,7 @@ log "Simulated sequences: $SIM"
 log "Running Python masking script..."
 
 "$PYTHON_BIN" "$SRC_DIR/apply_gap_pattern.py" \
-    --original-aln "$ORIGINAL_ALN" \
+    --original-aln "$ALIGNMENT" \
     --simulated-seqs "$SIM" \
     --output-dir "$OUTPUT_DIR" \
     --n-replicates "$N_REPLICATES" \
@@ -128,7 +139,7 @@ log "Expected files: $expected_files"
 log "Actual files: $actual_files"
 
 if [[ $actual_files -lt $expected_files ]]; then
-    log "WARN: Not all expected files were created (may be intentional if resuming)"
+    log "WARN: Not all expected files were created"
 fi
 
 if [[ $actual_files -gt 0 ]]; then

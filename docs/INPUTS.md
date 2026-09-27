@@ -1,185 +1,117 @@
 # Input Data Specification
 
-## Directory Structure
+The pipeline consumes Peter Mulhair's real RHG (reticulate homolog group)
+data directly — there is no separate "prepare your inputs" step. A manifest
+builder (`src/build_manifest.py`) discovers every (family, domain) unit from
+files already on disk and derives everything else (taxon lists, composite
+sets, per-domain model strings, a per-family random seed) from them.
 
-Place all input data for each RHG in its own directory under `inputs/`:
+## Directory layout expected by `build_manifest.py`
+
+One flat directory (e.g. `conv_fusion_data/`) containing, per family
+`F#####` and per domain `N` (a family has 2 domains in the current data, but
+nothing assumes exactly 2 — some families have 3+, see "Multi-domain
+families" below):
 
 ```
-inputs/
-├── RHG_001/
-│   ├── combined.aln
-│   ├── constrained.nwk
-│   └── model.txt
-├── RHG_002/
-│   ├── combined.aln
-│   ├── constrained.nwk
-│   └── model.txt
-├── RHG_003/
-│   └── [same structure]
-└── template/
-    └── [example files with descriptions]
+conv_fusion_data/
+├── F100058_Domain1.trim               # trimmed FASTA alignment for this domain
+├── F100058_Domain1.constr0.treefile   # constrained tree (composite clade forced
+│                                       #   monophyletic), branch lengths already
+│                                       #   estimated
+├── F100058_Domain1-geneID.tsv         # per-taxon label: "composite" or "parent"
+├── F100058_Domain2.trim
+├── F100058_Domain2.constr0.treefile
+├── F100058_Domain2-geneID.tsv
+├── ...
+└── CHG_model.json                     # {"F#####_Domain{N}": "<IQTree model string>", ...}
+                                        # one file, shared across all families
 ```
 
-## Required Files (Per RHG)
+### `F#####_Domain{N}.trim`
 
-### 1. `combined.aln`
+FASTA alignment for that domain — the region of the fused gene homologous to
+one parent gene, spanning both that parent's own orthologs and the
+composite/fused taxa's corresponding region. Already trimmed; the pipeline
+does not trim.
 
-**Content:** Combined DNA sequence alignment with both parent gene regions
+### `F#####_Domain{N}.constr0.treefile`
 
-**Format:** FASTA or Phylip (IQTree auto-detects)
+Newick tree with the composite clade constrained to be monophyletic.
+Branch lengths are expected to already be present (Step 1 re-fits them
+under the domain's real model regardless, via a fixed-topology `-te` IQTree
+run — see CLAUDE.md — so a tree without branch lengths would also work, just
+less accurately).
 
-**Structure:**
-- Single alignment containing the full sequence space of both parent genes
-- Gap characters (`-`) indicate missing regions:
-  - Parent_gene_1 only: gaps where parent_gene_2 region would be
-  - Parent_gene_2 only: gaps where parent_gene_1 region would be
-  - Fused: sequences for both regions (no gaps between)
+### `F#####_Domain{N}-geneID.tsv`
 
-**Example (FASTA):**
-```
->species_A
-ATGCGATCG----------CGTAGGCTAGGCT
->species_B
-----------CGTAGGCTAGGCTAGGCTAGGC
->species_C_fused
-ATGCGATCGCGTAGGCTAGGCTAGGCTAGGC
->species_D_fused
-ATGCGATCGCGTAGGCTAGGCTAGGCTAGGC
->species_E
-ATGCGATCG----------CGTAGGCTAGGCT
-```
+Two columns, no header: `taxon<TAB>category`, where `category` is
+`composite` (this taxon carries the fused gene) or `parent` (this taxon
+carries only this domain's parent gene). This is what Step 5 uses to know
+which taxa should form the composite clade when checking monophyly, and
+what `build_manifest.py` uses to derive each family's composite taxon set.
 
-**Notes:**
-- All taxa must be present (gaps indicate missing regions)
-- Alignment should already be trimmed (using trimAl `-gappyout` as in real analysis)
-- Gap positions automatically encode which genes each taxon carries
-- Sequence names must match exactly those in the constrained tree
-- The alignment length includes all gap positions
+### `CHG_model.json`
 
-### 2. `constrained.nwk`
+One JSON object, shared across the whole dataset, mapping
+`"F#####_Domain{N}"` → IQTree model string (e.g. `"LG+G4"`, `"JTT+F+R5"`).
+`build_manifest.py` looks this up per domain; a domain with no entry here is
+skipped (logged as a warning, not a fatal error — see below).
 
-**Content:** Monophyletic species-level tree in Newick format
-
-**Format:** Newick, with or without branch lengths
-
-**Examples:**
-```
-(species_A:0.01,species_B:0.02,(species_C_fused:0.003,species_D_fused:0.005):0.015);
-(species_A,species_B,(species_C_fused,species_D_fused));
-```
-
-**Notes:**
-- This is the **constrained** tree that enforces monophyly of the fused clade
-- Taxon names must match exactly those in combined.aln
-- **Branch lengths are optional:**
-  - If tree **has** branch lengths: Step 1 will be skipped (uses them for SeqGen)
-  - If tree **lacks** branch lengths: Step 1 will estimate them using IQTree
-  - To force re-estimation: use `-f` flag when running pipeline
-- Can be derived from species tree with fused clade constrained to be monophyletic
-
-### 3. `model.txt`
-
-**Content:** Best-fit substitution model for the combined alignment (from ModelFinder)
-
-**Format:** Plain text, one model string per file
-
-**Example:**
-```
-GTR+G4
-```
-
-**Other valid examples:**
-```
-HKY+G4
-JC
-TVM+G4
-K80+G
-```
-
-**Notes:**
-- Model is extracted from IQTree log file (`.iqtree` output) for the combined alignment
-- Look for line: `Best-fit model according to BIC: GTR+G4`
-- **Do not include** rate matrix details or base frequencies on separate lines
-- Format must match IQTree notation exactly (case-sensitive: `GTR`, not `gtr`)
-- If model includes gamma rate variation (`+G`), the alpha value will be extracted from Step 1 output
-- If model includes invariant sites (`+I`), this must be preserved in the model string
-
-## Preparing Input Data from Real Analysis
-
-### Create Combined Alignment
-```bash
-# Your real analysis has block1.aln and block2.aln
-# Combine them into a single alignment with gaps showing gene presence:
-
-python3 << 'EOF'
-from Bio import AlignIO
-import sys
-
-# Read the two component alignments
-block1 = AlignIO.read('my_analysis/RHG_001/block1.trimmed.aln', 'fasta')
-block2 = AlignIO.read('my_analysis/RHG_001/block2.trimmed.aln', 'fasta')
-
-block1_len = block1.get_alignment_length()
-block2_len = block2.get_alignment_length()
-
-# Create combined alignment
-combined_seqs = {}
-
-# Add block1 sequences
-for seq_record in block1:
-    combined_seqs[seq_record.id] = str(seq_record.seq) + '-' * block2_len
-
-# Add/update with block2 sequences
-for seq_record in block2:
-    if seq_record.id in combined_seqs:
-        # Taxon in both blocks (fused)
-        combined_seqs[seq_record.id] = combined_seqs[seq_record.id][:block1_len] + str(seq_record.seq)
-    else:
-        # Taxon only in block2
-        combined_seqs[seq_record.id] = '-' * block1_len + str(seq_record.seq)
-
-# Write combined alignment
-with open('inputs/RHG_001/combined.aln', 'w') as f:
-    for taxon, seq in sorted(combined_seqs.items()):
-        f.write(f'>{taxon}\n{seq}\n')
-EOF
-```
-
-### Extract Substitution Model
-```bash
-# Extract best-fit model from IQTree output:
-# Use whichever block's model you prefer (or average them)
-grep "Best-fit model according to BIC" my_analysis/RHG_001/block1.iqtree | awk '{print $NF}' > inputs/RHG_001/model.txt
-```
-
-### Get Constrained Tree
-```bash
-# Use your constrained tree from real analysis
-# Should enforce monophyly of fused clade
-cp my_analysis/RHG_001/constrained.nwk inputs/RHG_001/constrained.nwk
-```
-
-## Validation
-
-A validation script checks all inputs before starting the pipeline:
+## Building the manifest
 
 ```bash
-python3 src/validate_inputs.py inputs/RHG_001
+python3 src/build_manifest.py \
+    --data-dir /path/to/conv_fusion_data \
+    --output-json data/manifest/manifest_full.json \
+    --output-tsv  data/manifest/manifest_full.tsv
 ```
 
-This checks:
-- ✓ All required files exist (combined.aln, constrained.nwk, model.txt)
-- ✓ Alignment format is readable
-- ✓ Taxon names match between alignment and tree
-- ✓ Tree is valid Newick format
-- ✓ Model string is valid IQTree notation
-- ✓ Gap patterns show mixed gene composition (at least one fused + one parent-only taxon)
+This discovers families/domains from the `.trim` files actually present on
+disk (not from `CHG_model.json`'s key set — that file can contain orphaned
+entries with no corresponding alignment/tree/geneID triple; those are
+skipped with a warning, not an error). For each family it also computes a
+deterministic seed (`sha256(family_id)`), so all of a family's domains draw
+from the same underlying simulation scenario — replicate *i* means the same
+joint scenario across every domain of that family, not independently-drawn
+per-domain replicates.
 
-## Template
+`manifest_full.json` (nested, keyed by family) is what `run_family.sh`
+reads at runtime; `manifest_full.tsv` (flat, one row per family+domain) is
+for ad hoc shell/`xargs` use, e.g. filtering by `n_taxa` to build a batching
+strategy (see `data/manifest/chunks_le200/` for the ≤200-taxa bulk run).
 
-A template RHG with dummy data is provided in `inputs/template/` for reference. Copy and modify it:
+Restrict to one family while testing with `--family F100058`.
 
-```bash
-cp -r inputs/template inputs/RHG_001
-# Then edit the combined.aln, constrained.nwk, and model.txt with your actual data
-```
+## Multi-domain families
+
+Most families have exactly 2 domains (one per parent gene). A minority have
+more — `build_manifest.py` places no assumption on domain count, and
+`run_family.sh` loops over however many domains a family's manifest entry
+lists. Per an earlier project decision, extra-domain families are treated
+as ordinary representatives of the family, not a special case: each domain
+still gets its own Step 1–6 run, and the family-level OR/AND join (Step 6
+family) folds in however many domains are present.
+
+## Validation the manifest builder performs
+
+- **Missing companion file**: a `.trim` with no matching
+  `.constr0.treefile` or `-geneID.tsv` — that domain is skipped, family
+  keeps whatever other domains are complete.
+- **Missing model entry**: a domain with no `CHG_model.json` key — skipped
+  the same way.
+- **Composite-taxon-set consistency**: a family's domains should agree on
+  which taxa are composite (a taxon carrying the fused gene should show
+  `composite` in every domain's `-geneID.tsv`, not just some). Inconsistent
+  families are still included but flagged
+  (`composite_taxa_consistent: false` in the JSON) — worth spot-checking
+  before trusting that family's family-level join.
+
+## What downstream steps actually read
+
+`run_family.sh` pulls each domain's `trim`, `tree`, `model`, `geneid` path
+and the family's `seed` straight out of `manifest_full.json` — see its
+`DOMAIN_INFO` python snippet. No other input file format is supported; if
+you have data in a different shape (e.g. separate untrimmed alignments, or
+a different taxon-label convention), the manifest builder is the one place
+that would need extending, not the six step scripts.

@@ -1,10 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# Step 5: Run AU test on each replicate
-# For each replicate, run AU test comparing constrained vs unconstrained trees
-# Input: rep_*/masked_unconstrained.treefile, rep_*/masked_constrained.treefile
-# Output: rep_*/au_test_result.txt (AU test results)
+# Step 5: Run AU test on each replicate of ONE domain.
+# For each replicate, run AU test comparing constrained vs unconstrained trees,
+# and independently check composite-clade monophyly (rooting-invariant).
+# Input:  rep_*/masked_unconstrained.treefile, rep_*/masked_constrained.treefile
+#         (Step 4), rep_*_masked.aln (Step 3), the domain's -geneID.tsv
+# Output: rep_*/au_test_result.* (AU test results), step5_results.txt (one
+#         RESULT line per replicate: reject/no-reject, p-value, monophyly)
 
 # ============================================================================
 # Setup
@@ -15,16 +18,19 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") -i <input_dir> -o <output_dir> -c <config_file> [-f]
+Usage: $(basename "$0") -s <step3_output_dir> -t <step4_output_dir> -m <model> -g <geneid_tsv> -o <output_dir> -c <config_file> [-f]
 
 Required:
-  -i <input_dir>        Input RHG directory
-  -o <output_dir>       Output directory for step 5 results
-  -c <config_file>      Config file
+  -s <dir>    Step 3 output directory (contains rep_*_masked.aln)
+  -t <dir>    Step 4 output directory (contains rep_*/masked_{un,}constrained.treefile)
+  -m <str>    IQTree model string for this domain (e.g. "LG+I+G4")
+  -g <file>   Domain's -geneID.tsv (taxon <TAB> composite|parent)
+  -o <dir>    Output directory for step 5 results
+  -c <file>   Config file
 
 Optional:
-  -f                    Force re-run
-  -h                    Show help
+  -f          Force re-run
+  -h          Show help
 
 EOF
     exit 1
@@ -34,14 +40,20 @@ EOF
 # Parse Arguments
 # ============================================================================
 
-INPUT_DIR=""
+STEP3_OUTPUT_DIR=""
+STEP4_OUTPUT_DIR=""
+MODEL=""
+GENEID_FILE=""
 OUTPUT_DIR=""
 CONFIG_FILE=""
 FORCE_RERUN=false
 
-while getopts "i:o:c:fh" opt; do
+while getopts "s:t:m:g:o:c:fh" opt; do
     case $opt in
-        i) INPUT_DIR="$OPTARG" ;;
+        s) STEP3_OUTPUT_DIR="$OPTARG" ;;
+        t) STEP4_OUTPUT_DIR="$OPTARG" ;;
+        m) MODEL="$OPTARG" ;;
+        g) GENEID_FILE="$OPTARG" ;;
         o) OUTPUT_DIR="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
         f) FORCE_RERUN=true ;;
@@ -50,7 +62,8 @@ while getopts "i:o:c:fh" opt; do
     esac
 done
 
-if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" || -z "$CONFIG_FILE" ]]; then
+if [[ -z "$STEP3_OUTPUT_DIR" || -z "$STEP4_OUTPUT_DIR" || -z "$MODEL" || -z "$GENEID_FILE" || -z "$OUTPUT_DIR" || -z "$CONFIG_FILE" ]]; then
+    echo "Error: -s, -t, -m, -g, -o, and -c are all required"
     usage
 fi
 
@@ -58,7 +71,11 @@ fi
 # Load Configuration
 # ============================================================================
 
+CLI_FORCE_RERUN="$FORCE_RERUN"
 source "$CONFIG_FILE"
+if [[ "$CLI_FORCE_RERUN" == "true" ]]; then
+    FORCE_RERUN=true
+fi
 mkdir -p "$OUTPUT_DIR"
 
 LOG="${OUTPUT_DIR}/step5.log"
@@ -68,51 +85,34 @@ log() {
 }
 
 log "Starting Step 5: Run AU Test"
+log "Model: $MODEL"
 log "Output directory: $OUTPUT_DIR"
 
-# Find Step 3 and Step 4 output directories
-PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-STEP3_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step3_* 2>/dev/null | head -1)
-STEP4_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step4_* 2>/dev/null | head -1)
-
-if [[ -z "$STEP3_OUTPUT_DIR" || -z "$STEP4_OUTPUT_DIR" ]]; then
-    log "ERROR: Could not find Step 3/4 output directories"
+if [[ ! -f "$GENEID_FILE" ]]; then
+    log "ERROR: geneID file not found: $GENEID_FILE"
     exit 1
 fi
 
-log "Using Step 3 output from: $STEP3_OUTPUT_DIR"
-log "Using Step 4 output from: $STEP4_OUTPUT_DIR"
-
 # ============================================================================
-# Check Inputs
+# Read geneID.tsv to get composite (fused) taxa
 # ============================================================================
+#
+# Real data uses a 2-way composite/parent vocabulary per domain (which parent
+# a "parent" taxon belongs to is implicit -- it's whichever domain this file
+# is for). This replaces the old 4-way Parent_gene_1/Parent_gene_2/fused/absent
+# presence_absence.txt scheme, which doesn't exist in the real per-domain data.
 
-MODEL=$(cat "${INPUT_DIR}/model.txt" | tr -d '[:space:]')
-log "Using model: $MODEL"
-
-# ============================================================================
-# Read Presence/Absence to Get Fused Taxa
-# ============================================================================
-
-PA_FILE="${INPUT_DIR}/presence_absence.txt"
-
-if [[ ! -f "$PA_FILE" ]]; then
-    log "ERROR: presence_absence.txt not found"
-    exit 1
-fi
-
-# Extract fused taxa (skip header)
-FUSED_TAXA=()
-while IFS=$'\t' read -r species gene_type; do
-    if [[ "$gene_type" == "fused" ]]; then
-        FUSED_TAXA+=("$species")
+COMPOSITE_TAXA=()
+while IFS=$'\t' read -r taxon category; do
+    if [[ "$category" == "composite" ]]; then
+        COMPOSITE_TAXA+=("$taxon")
     fi
-done < <(tail -n +2 "$PA_FILE")
+done < "$GENEID_FILE"
 
-log "Fused taxa (count: ${#FUSED_TAXA[@]}): ${FUSED_TAXA[@]}"
+log "Composite (fused) taxa (count: ${#COMPOSITE_TAXA[@]}): ${COMPOSITE_TAXA[@]}"
 
-if [[ ${#FUSED_TAXA[@]} -eq 0 ]]; then
-    log "ERROR: No fused taxa found in presence_absence.txt"
+if [[ ${#COMPOSITE_TAXA[@]} -eq 0 ]]; then
+    log "ERROR: No composite taxa found in $GENEID_FILE"
     exit 1
 fi
 
@@ -122,7 +122,7 @@ fi
 
 JOBS="${REPLICATE_JOBS:-${HPC_THREADS:-1}}"
 IQTREE_THREADS_PER_JOB="${IQTREE_THREADS_PER_JOB:-1}"
-FUSED_TAXA_STR="${FUSED_TAXA[*]}"
+COMPOSITE_TAXA_STR="${COMPOSITE_TAXA[*]}"
 
 process_one_replicate_au() {
     local rep_dir="$1"
@@ -162,12 +162,25 @@ process_one_replicate_au() {
         # Combine both trees into one file for AU test comparison
         cat "$CONSTRAINED" "$UNCONSTRAINED" > "$TREES_FOR_AU"
 
-        # Run AU test comparing the two topologies
+        # Run AU test comparing the two topologies.
+        #
+        # -n 0 is CRITICAL: without it, IQTree treats -s + -m as "search for
+        # the ML tree from scratch" and only evaluates the -z trees against
+        # whatever it finds AFTER a full independent NNI search completes --
+        # silently redoing work as expensive as Step 4's entire unconstrained
+        # search, for every replicate, before ever reaching the actual (cheap)
+        # AU comparison. Confirmed via IQTree's own documented usage for
+        # topology tests: "-n 0: avoid tree search and skip to parameter
+        # estimation and tree evaluation". This was a pre-existing bug (not
+        # introduced by the domain-split rewrite) caught by a dedicated-node
+        # SLURM benchmark timing out at 45 minutes on what should be a
+        # few-seconds-per-replicate test.
         $IQTREE_BIN \
             -s "$MASKED_ALN" \
             -m "$MODEL" \
             -z "$TREES_FOR_AU" \
             -au \
+            -n 0 \
             -zb "$N_BOOTSTRAP" \
             -T "$IQTREE_THREADS_PER_JOB" \
             -redo \
@@ -175,14 +188,26 @@ process_one_replicate_au() {
             > "$REP_LOG" 2>&1
     fi
 
-    # Extract AU test p-value from IQTree output
+    # Extract AU test p-value from IQTree output.
+    #
+    # trees_for_au.nwk is built as `cat CONSTRAINED UNCONSTRAINED`, so Tree ID
+    # 1 = constrained, Tree ID 2 = unconstrained. The question this whole test
+    # exists to answer -- does AU reject the monophyly constraint? -- is
+    # answered by TREE 1's p-value, not tree 2's. Tree 2 (unconstrained) is by
+    # construction the best/reference tree IQTree found, so its own p-AU sits
+    # at ~1 essentially always; extracting it (as this line previously did,
+    # matching on "2" instead of "1") meant the pipeline's core rejection
+    # count was structurally guaranteed to read ~0% regardless of the true
+    # rate -- a critical, pre-existing correctness bug, not a parsing quirk.
     local au_rejected=0
     local au_pval="NA"
+    local delta_logl="NA"
+    local constrained_logl="NA"
+    local unconstrained_logl="NA"
     if [[ -f "${AU_OUT}.iqtree" ]]; then
-        # Find tree comparison table: look for "  2" followed by a negative logL value (contains "-")
-        # Extract the AU p-value (second-to-last numeric value before +/- indicator)
-        au_pval=$(awk '/^[ \t]+2[ \t]+-[0-9]/ {
-            # Remove +/- indicators, then extract the last numeric value (AU p-value)
+        # Find tree comparison table: look for "  1" followed by a negative logL value (contains "-")
+        # Extract the AU p-value (last purely-numeric field on that line, ignoring +/- confidence-set markers)
+        au_pval=$(awk '/^[ \t]+1[ \t]+-[0-9]/ {
             for (i = NF; i >= 1; i--) {
                 field = $i
                 gsub(/[+-]$/, "", field)
@@ -199,14 +224,28 @@ process_one_replicate_au() {
                 au_rejected=1
             fi
         fi
+
+        # deltaL: logL difference from the best (unconstrained) tree in the
+        # comparison set -- field 3 of the same tree-1 row used above. This
+        # is the actual test-statistic magnitude, not just the threshold
+        # decision -- recorded so the null distribution of ΔlogL across
+        # replicates can be compared directly against the real data's
+        # observed ΔlogL (a permutation/parametric-bootstrap-style
+        # comparison), independent of the AU p-value's own significance call.
+        delta_logl=$(awk '/^[ \t]+1[ \t]+-[0-9]/ { print $3; exit }' "${AU_OUT}.iqtree" || echo "NA")
+        constrained_logl=$(awk '/^[ \t]+1[ \t]+-[0-9]/ { print $2; exit }' "${AU_OUT}.iqtree" || echo "NA")
+        unconstrained_logl=$(awk '/^[ \t]+2[ \t]+-[0-9]/ { print $2; exit }' "${AU_OUT}.iqtree" || echo "NA")
+        delta_logl="${delta_logl:-NA}"
+        constrained_logl="${constrained_logl:-NA}"
+        unconstrained_logl="${unconstrained_logl:-NA}"
     fi
 
     # ====================================================================
-    # Check Monophyly of Fused Clade in Both Trees
+    # Check Monophyly of Composite Clade in Both Trees
     # ====================================================================
 
     local TAXA
-    read -ra TAXA <<< "$FUSED_TAXA_STR"
+    read -ra TAXA <<< "$COMPOSITE_TAXA_STR"
 
     # Check unconstrained tree (true/false/NA if untestable - see check_monophyly.py)
     local unconstrained_mono_json unconstrained_mono
@@ -237,11 +276,11 @@ process_one_replicate_au() {
     local reason="none"
     if [[ "$au_rejected" == "1" ]]; then
         if [[ "$unconstrained_mono" == "false" ]]; then
-            # AU test rejected AND fused clade is NOT monophyletic
+            # AU test rejected AND composite clade is NOT monophyletic
             # This is a true AU test "failure" (false positive of monophyly)
             reason="no_monophyly"
         else
-            # AU test rejected but fused clade still monophyletic (or untestable)
+            # AU test rejected but composite clade still monophyletic (or untestable)
             reason="other"
         fi
     fi
@@ -265,7 +304,7 @@ process_one_replicate_au() {
     {
         echo "Monophyly Check Results"
         echo "======================"
-        echo "Fused taxa: ${TAXA[@]}"
+        echo "Composite taxa: ${TAXA[@]}"
         echo ""
         echo "Constrained tree (should be monophyletic): $constrained_mono"
         echo "Unconstrained tree: $unconstrained_mono"
@@ -275,17 +314,17 @@ process_one_replicate_au() {
         echo ""
         if [[ "$au_rejected" == "1" ]]; then
             if [[ "$unconstrained_mono" == "false" ]]; then
-                echo "AU REJECTION REASON: Fused clade lost monophyly (true signal of polyphyly)"
+                echo "AU REJECTION REASON: Composite clade lost monophyly (true signal of polyphyly)"
             else
-                echo "AU REJECTION REASON: Topology changed, but fused clade still monophyletic"
+                echo "AU REJECTION REASON: Topology changed, but composite clade still monophyletic"
             fi
         fi
     } > "${REP_OUTPUT_DIR}/monophyly_check.txt"
 
-    echo "RESULT $rep_name rejected=$au_rejected reason=$reason mono=$unconstrained_mono ntaxa=$ntaxa nsites=$nsites treelen=$treelen pval=$au_pval"
+    echo "RESULT $rep_name rejected=$au_rejected reason=$reason mono=$unconstrained_mono ntaxa=$ntaxa nsites=$nsites treelen=$treelen pval=$au_pval deltalogl=$delta_logl constrained_logl=$constrained_logl unconstrained_logl=$unconstrained_logl"
 }
 export -f process_one_replicate_au
-export IQTREE_BIN MODEL N_BOOTSTRAP FORCE_RERUN OUTPUT_DIR STEP3_OUTPUT_DIR PYTHON_BIN SRC_DIR IQTREE_THREADS_PER_JOB FUSED_TAXA_STR
+export IQTREE_BIN MODEL N_BOOTSTRAP FORCE_RERUN OUTPUT_DIR STEP3_OUTPUT_DIR PYTHON_BIN SRC_DIR IQTREE_THREADS_PER_JOB COMPOSITE_TAXA_STR
 
 RESULTS_FILE="${OUTPUT_DIR}/step5_results.txt"
 : > "$RESULTS_FILE"

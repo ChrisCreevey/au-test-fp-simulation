@@ -1,11 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# Step 4: Reconstruct gene trees for each simulated replicate
-# For each of 100 replicates:
-#   - Build unconstrained tree from masked alignment
-#   - Build constrained tree forcing fused sequences to be monophyletic
-# Input: rep_001_masked.aln, rep_002_masked.aln, ... (from Step 3)
+# Step 4: Reconstruct gene trees for each simulated replicate of ONE domain.
+# For each replicate:
+#   - Build an unconstrained ML tree from the masked alignment
+#   - Evaluate the domain's constrained topology (composite clade forced
+#     monophyletic) on the masked alignment, re-fitting branch lengths (-te)
+# Input:  rep_001_masked.aln, ... (from Step 3) + the domain's constrained
+#         tree topology + model
 # Output: rep_*/masked_unconstrained.treefile, rep_*/masked_constrained.treefile
 
 # ============================================================================
@@ -17,16 +19,18 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") -i <input_dir> -o <output_dir> -c <config_file> [-f]
+Usage: $(basename "$0") -s <step3_output_dir> -t <constrained_tree> -m <model> -o <output_dir> -c <config_file> [-f]
 
 Required:
-  -i <input_dir>        Input RHG directory
-  -o <output_dir>       Output directory for step 4 results
-  -c <config_file>      Config file
+  -s <dir>    Step 3 output directory (contains rep_*_masked.aln)
+  -t <file>   Domain's constrained tree topology (e.g. F100058_Domain1.constr0.treefile)
+  -m <str>    IQTree model string for this domain (e.g. "LG+I+G4")
+  -o <dir>    Output directory for step 4 results
+  -c <file>   Config file
 
 Optional:
-  -f                    Force re-run
-  -h                    Show help
+  -f          Force re-run
+  -h          Show help
 
 EOF
     exit 1
@@ -36,14 +40,18 @@ EOF
 # Parse Arguments
 # ============================================================================
 
-INPUT_DIR=""
+STEP3_OUTPUT_DIR=""
+CONSTRAINED_TREE=""
+MODEL=""
 OUTPUT_DIR=""
 CONFIG_FILE=""
 FORCE_RERUN=false
 
-while getopts "i:o:c:fh" opt; do
+while getopts "s:t:m:o:c:fh" opt; do
     case $opt in
-        i) INPUT_DIR="$OPTARG" ;;
+        s) STEP3_OUTPUT_DIR="$OPTARG" ;;
+        t) CONSTRAINED_TREE="$OPTARG" ;;
+        m) MODEL="$OPTARG" ;;
         o) OUTPUT_DIR="$OPTARG" ;;
         c) CONFIG_FILE="$OPTARG" ;;
         f) FORCE_RERUN=true ;;
@@ -52,7 +60,8 @@ while getopts "i:o:c:fh" opt; do
     esac
 done
 
-if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" || -z "$CONFIG_FILE" ]]; then
+if [[ -z "$STEP3_OUTPUT_DIR" || -z "$CONSTRAINED_TREE" || -z "$MODEL" || -z "$OUTPUT_DIR" || -z "$CONFIG_FILE" ]]; then
+    echo "Error: -s, -t, -m, -o, and -c are all required"
     usage
 fi
 
@@ -60,7 +69,11 @@ fi
 # Load Configuration
 # ============================================================================
 
+CLI_FORCE_RERUN="$FORCE_RERUN"
 source "$CONFIG_FILE"
+if [[ "$CLI_FORCE_RERUN" == "true" ]]; then
+    FORCE_RERUN=true
+fi
 mkdir -p "$OUTPUT_DIR"
 
 LOG="${OUTPUT_DIR}/step4.log"
@@ -70,32 +83,14 @@ log() {
 }
 
 log "Starting Step 4: Reconstruct Gene Trees"
+log "Constrained tree: $CONSTRAINED_TREE"
+log "Model: $MODEL"
 log "Output directory: $OUTPUT_DIR"
-
-# Find Step 3 output directory
-PARENT_OUTPUT_DIR=$(dirname "$OUTPUT_DIR")
-STEP3_OUTPUT_DIR=$(ls -d "$PARENT_OUTPUT_DIR"/step3_* 2>/dev/null | head -1)
-
-if [[ -z "$STEP3_OUTPUT_DIR" ]]; then
-    log "ERROR: Could not find Step 3 output directory"
-    exit 1
-fi
-
-log "Using Step 3 output from: $STEP3_OUTPUT_DIR"
-
-# ============================================================================
-# Check Inputs
-# ============================================================================
-
-MODEL=$(cat "${INPUT_DIR}/model.txt" | tr -d '[:space:]')
-CONSTRAINED_TREE="${INPUT_DIR}/constrained.nwk"
 
 if [[ ! -f "$CONSTRAINED_TREE" ]]; then
     log "ERROR: Constrained tree not found: $CONSTRAINED_TREE"
     exit 1
 fi
-
-log "Using model: $MODEL"
 
 # ============================================================================
 # Process Each Replicate (in parallel — replicates are independent)
@@ -109,7 +104,7 @@ log "Using model: $MODEL"
 JOBS="${REPLICATE_JOBS:-${HPC_THREADS:-1}}"
 IQTREE_THREADS_PER_JOB="${IQTREE_THREADS_PER_JOB:-1}"
 
-total_reps=$(ls -1 "$STEP3_OUTPUT_DIR"/rep_*_masked.aln 2>/dev/null | wc -l)
+total_reps=$(ls -1 "$STEP3_OUTPUT_DIR"/rep_*_masked.aln 2>/dev/null | wc -l) || true
 log "Found $total_reps replicates to process (running up to $JOBS concurrently)"
 
 process_one_replicate() {

@@ -47,33 +47,6 @@ else
     echo "  ✓ IQTree2 already installed"
 fi
 
-# SeqGen (sequence simulation)
-if ! command -v seq-gen &> /dev/null; then
-    echo "  Installing seq-gen..."
-    brew install seq-gen
-    echo "  ✓ seq-gen installed"
-else
-    echo "  ✓ seq-gen already installed"
-fi
-
-# MAFFT (sequence alignment - optional but useful)
-if ! command -v mafft &> /dev/null; then
-    echo "  Installing MAFFT..."
-    brew install mafft
-    echo "  ✓ MAFFT installed"
-else
-    echo "  ✓ MAFFT already installed"
-fi
-
-# GNU Parallel (useful for local parallelization)
-if ! command -v parallel &> /dev/null; then
-    echo "  Installing GNU Parallel..."
-    brew install parallel
-    echo "  ✓ GNU Parallel installed"
-else
-    echo "  ✓ GNU Parallel already installed"
-fi
-
 echo ""
 
 # ============================================================================
@@ -123,9 +96,6 @@ check_tool() {
 ALL_OK=true
 
 check_tool "IQTree2" "iqtree2" || ALL_OK=false
-check_tool "SeqGen" "seq-gen" || ALL_OK=false
-check_tool "MAFFT" "mafft" || ALL_OK=false
-check_tool "GNU Parallel" "parallel" || ALL_OK=false
 check_tool "Python3" "python3" || ALL_OK=false
 
 echo ""
@@ -140,15 +110,17 @@ if [[ "$ALL_OK" == "true" ]]; then
     echo "SUCCESS: All dependencies installed and verified ✓"
     echo ""
     echo "Next steps:"
-    echo "  1. Place your input RHG data in: inputs/RHG_001/, inputs/RHG_002/, etc."
-    echo "  2. See QUICKSTART.md for data preparation instructions"
-    echo "  3. Run pipeline locally:"
-    echo "     bash scripts/master_pipeline.sh -i inputs/RHG_001 -c config/pipeline.conf"
+    echo "  1. Build a manifest against your real RHG data (see docs/INPUTS.md):"
+    echo "     python3 src/build_manifest.py --data-dir <dir> \\"
+    echo "         --output-json data/manifest/manifest_full.json \\"
+    echo "         --output-tsv  data/manifest/manifest_full.tsv"
+    echo "  2. Run one family:"
+    echo "     bash scripts/run_family.sh -f <family_id> \\"
+    echo "         -m data/manifest/manifest_full.json -o data/sim_outputs \\"
+    echo "         -c config/pipeline.conf"
     echo ""
     echo "Tool paths (edit config/pipeline.conf if different):"
     echo "  IQTREE_BIN=$(command -v iqtree2)"
-    echo "  SEQGEN_BIN=$(command -v seq-gen)"
-    echo "  MAFFT_BIN=$(command -v mafft)"
     echo "  PYTHON_BIN=$PYTHON_BIN"
 else
     echo "ERROR: Some dependencies failed to install"
