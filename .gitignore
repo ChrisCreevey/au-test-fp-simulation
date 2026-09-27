@@ -3,9 +3,8 @@ outputs/
 logs/
 *.log
 
-# Input data (often large)
-inputs/RHG_*/
-!inputs/template/
+# Local development notes (not for the public repo)
+DEV_NOTES.md
 
 # Python cache and virtual environments
 __pycache__/

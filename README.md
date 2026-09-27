@@ -12,8 +12,8 @@ and measures how often the test incorrectly rejects monophyly, giving an
 empirical false-positive rate to compare against the 41% polyphyletic rate
 observed in real gene families (Mulhair et al.).
 
-See [CLAUDE.md](CLAUDE.md) for the full scientific background, architecture
-rationale, and implementation/bugfix history.
+See [docs/METHODS.md](docs/METHODS.md) for the full scientific background
+and architecture rationale.
 
 ## Dependencies
 
@@ -71,7 +71,7 @@ bash scripts/run_family_chunk.sh <chunk_file> <manifest.json> <output_base_dir> 
 ```
 
 `hpc_templates/bulk_le200_array.slurm` is the production array-job template
-that drives this at scale (see CLAUDE.md §6 for the chunk-sizing rationale
+that drives this at scale (see docs/METHODS.md §6 for the chunk-sizing rationale
 and current run status). `hpc_templates/run_single_family.slurm` is a
 smaller template for one family. `hpc_templates/mopup_le200_array.slurm` +
 `scripts/check_completion.py` handle resubmitting whatever a first pass
@@ -91,7 +91,7 @@ columns; see `src/combine_family_results.py`).
 ## Pipeline overview
 
 Per domain (each fused family has one AU test per parent-gene domain, not
-one per family — see CLAUDE.md §2 for why):
+one per family — see docs/METHODS.md §2 for why):
 
 1. **Branch lengths + site rates** (`01_estimate_branch_lengths.sh`) — fit
    under the domain's real model on the real alignment

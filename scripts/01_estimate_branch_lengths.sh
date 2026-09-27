@@ -4,7 +4,7 @@ set -euo pipefail
 # Step 1: fit branch lengths AND the full rate-heterogeneity model for ONE
 # domain of ONE family, ready for AliSim (Step 2).
 #
-# History of fixes to this step (see CLAUDE.md handover for full detail):
+# History of fixes to this step:
 #   1. Originally just copied the real .constr0.treefile through unchanged
 #      whenever it already had branch lengths, and Step 2 (SeqGen) guessed a
 #      hardcoded alpha=1.0 with +I dropped entirely. Fixed by always running

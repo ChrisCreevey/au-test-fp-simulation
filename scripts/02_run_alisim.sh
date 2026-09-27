@@ -5,7 +5,7 @@ set -euo pipefail
 # (IQTree's own native simulator) instead of SeqGen, with per-site rate
 # variation CONCENTRATED at the same real positions the alignment shows it.
 #
-# Why AliSim, not SeqGen (see CLAUDE.md handover for full investigation):
+# Why AliSim, not SeqGen:
 #   - SeqGen requires approximating FreeRate (+R) models as Gamma (+G), and
 #     combined with an earlier Step 1 bug that also refit BRANCH LENGTHS
 #     under that same substitute model, this inflated total tree length by

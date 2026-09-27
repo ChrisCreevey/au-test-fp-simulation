@@ -4,7 +4,7 @@ Simulate a domain's replicates with per-site rate variation concentrated at
 the SAME real positions the alignment actually shows it, instead of spread
 i.i.d. across all sites under a single smoothed gamma+invariant summary.
 
-Background (see CLAUDE.md handover): simulating a domain's real alignment
+Background: simulating a domain's real alignment
 length under its correctly-fitted branch lengths and a correctly-fitted
 global alpha/pinvar still reproduces far less pairwise sequence identity
 than the real data shows (e.g. 14.6% vs 47.2% for one real domain). Ruled

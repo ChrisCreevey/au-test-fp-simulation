@@ -3,8 +3,7 @@ set -euo pipefail
 
 # Orchestrate the full pipeline (Steps 1-6) for ONE family across all of its
 # domains, then the family-level OR/AND join. This is the entry point for
-# the current domain-split pipeline (see CLAUDE.md); the old single-tree
-# master_pipeline.sh this superseded has been removed.
+# the domain-split pipeline (see docs/METHODS.md for the architecture).
 #
 # Reads domain list, models, and the family's shared seed directly from the
 # manifest (src/build_manifest.py output) -- no re-derivation.

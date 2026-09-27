@@ -40,7 +40,7 @@ does not trim.
 Newick tree with the composite clade constrained to be monophyletic.
 Branch lengths are expected to already be present (Step 1 re-fits them
 under the domain's real model regardless, via a fixed-topology `-te` IQTree
-run — see CLAUDE.md — so a tree without branch lengths would also work, just
+run — see docs/METHODS.md — so a tree without branch lengths would also work, just
 less accurately).
 
 ### `F#####_Domain{N}-geneID.tsv`

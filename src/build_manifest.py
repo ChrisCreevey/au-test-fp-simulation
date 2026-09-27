@@ -13,8 +13,8 @@ Real data layout (per family F#####, per domain N):
 A family can have any number of domains (in the current data drop it is always
 2, but nothing here assumes that). This script discovers whatever domains are
 actually present as files, ignoring any extra domain keys in CHG_model.json
-that have no corresponding .trim/.treefile/.tsv triple (see handover notes:
-these are orphaned metadata from an earlier upstream step).
+that have no corresponding .trim/.treefile/.tsv triple -- these are
+orphaned metadata from an earlier upstream step.
 
 Output:
   --output-json  nested manifest: family -> {seed, domains: {n: {...}}, ...}

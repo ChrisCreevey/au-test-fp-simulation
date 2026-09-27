@@ -4,10 +4,10 @@ set -euo pipefail
 # Step 6: Join a family's per-domain Step 5 results into family-level
 # OR/AND consolidation rates (src/summarise_family.py).
 #
-# Per the project's "report raw, decide downstream" design (see CLAUDE.md
-# handover), Step 5 never forces a single-domain-per-family verdict -- this
-# step is that downstream join, done AFTER all of a family's domains have
-# been through Step 5, not baked into Step 5 itself.
+# Per the project's "report raw, decide downstream" design (see
+# docs/METHODS.md §3), Step 5 never forces a single-domain-per-family
+# verdict -- this step is that downstream join, done AFTER all of a
+# family's domains have been through Step 5, not baked into Step 5 itself.
 #
 # Discovers domains automatically from the family's output directory
 # structure (<family>/Domain*/step5), the same convention Steps 1-5 use --

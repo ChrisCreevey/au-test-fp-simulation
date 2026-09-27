@@ -6,8 +6,8 @@ output) into one dataset-wide table.
 Why not a plain `cat`/header-then-concat: summarise_family.py's header is
 dynamic -- it has one Pct_Significant_<Domain>/Real_DeltaLogL_<Domain>/
 Permutation_P_Upper_<Domain> column per domain the family actually has, and
-most families have 2 domains but some ("Treat them all as representatives of
-that family" -- see CLAUDE.md) have 3+. A naive concatenation would silently
+most families have 2 domains but some (treated as ordinary representatives
+of the family, see docs/INPUTS.md) have 3+. A naive concatenation would silently
 misalign columns between a 2-domain and a 3-domain family's rows. This does a
 column-name union instead: every row gets every column that ANY family
 produced, "NA" where that family didn't have that domain.
