@@ -153,6 +153,8 @@ else
     if "$PYTHON_BIN" "$SRC_DIR/simulate_by_site_rate.py" \
         --tree "$TREE" \
         --base-model "$BASE_MODEL" \
+        --full-model "$FITTED_MODEL" \
+        --alignment "$ALIGNMENT" \
         --site-rates "$SITE_RATES_FILE" \
         --n-replicates "$N_REPLICATES" \
         --seed "$SEED" \

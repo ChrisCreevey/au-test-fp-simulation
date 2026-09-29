@@ -58,6 +58,67 @@ def read_site_rates(path):
     return cats, cat_rates
 
 
+def read_alignment_length(path):
+    """Length of the first sequence in a FASTA alignment (all equal length)."""
+    length = 0
+    started = False
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if started:
+                    break
+                started = True
+                continue
+            length += len(line)
+    return length
+
+
+def simulate_single_block(tree, full_model, alignment_path, n_replicates, seed, iqtree_bin, work_dir, output_path):
+    """Fallback for a domain whose model has no +G/+R rate-heterogeneity term
+    -- IQTree's -wsr produces zero per-site category rows for these (plain
+    models and +I-only models alike), so there is no real per-site pattern to
+    concentrate simulation around. Simulate the whole domain in one AliSim
+    call under the full fitted model string (AliSim natively handles any
+    +I/+F/+G/+R suffix) at the real alignment's length. AliSim's raw
+    --single-output already has exactly the record structure downstream
+    Step 3 expects (N_REPLICATES blocks of n_taxa records, fixed traversal
+    order) -- no stitching needed, since there is only one block."""
+    n_sites = read_alignment_length(alignment_path)
+    if n_sites == 0:
+        print(f"ERROR: could not determine alignment length from {alignment_path}", file=sys.stderr)
+        sys.exit(1)
+
+    prefix = Path(work_dir) / "single_block"
+    cmd = [
+        iqtree_bin, "--alisim", str(prefix),
+        "-t", tree,
+        "-m", full_model,
+        "--length", str(n_sites),
+        "--seed", str(seed),
+        "--num-alignments", str(n_replicates),
+        "--single-output",
+        "-af", "fasta",
+    ]
+    print(f"No per-site rate categories available (model '{full_model}' has no +G/+R "
+          f"site-rate output from -wsr) -- falling back to one whole-domain AliSim call "
+          f"at {n_sites} sites under the full fitted model.", file=sys.stderr)
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0:
+        print(f"ERROR: AliSim failed for single-block fallback:\n{result.stdout}", file=sys.stderr)
+        sys.exit(1)
+
+    out_file = f"{prefix}.fa"
+    if not Path(out_file).exists():
+        print(f"ERROR: expected output file not created: {out_file}", file=sys.stderr)
+        sys.exit(1)
+
+    Path(out_file).replace(output_path)
+    print(f"Wrote {n_replicates} replicates ({n_sites} sites) to {output_path}", file=sys.stderr)
+
+
 def read_fasta_records(path):
     """Ordered list of (taxon, seq), preserving duplicates (multi-replicate files)."""
     records = []
@@ -84,6 +145,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--tree', required=True)
     ap.add_argument('--base-model', required=True, help='Substitution model with no rate-heterogeneity suffix, e.g. LG')
+    ap.add_argument('--full-model', required=True, help='Complete fitted model string incl. any +I/+F/+G/+R suffix, for the no-rate-heterogeneity fallback')
+    ap.add_argument('--alignment', required=True, help='Real domain alignment, for its length in the no-rate-heterogeneity fallback')
     ap.add_argument('--site-rates', required=True, help="IQTree's .rate file (from -wsr)")
     ap.add_argument('--n-replicates', type=int, required=True)
     ap.add_argument('--seed', type=int, required=True)
@@ -97,8 +160,11 @@ def main():
 
     cats, cat_rates = read_site_rates(args.site_rates)
     if not cats:
-        print("ERROR: no sites read from site-rates file", file=sys.stderr)
-        sys.exit(1)
+        simulate_single_block(
+            args.tree, args.full_model, args.alignment, args.n_replicates,
+            args.seed, args.iqtree_bin, args.work_dir, args.output,
+        )
+        return
 
     total_sites = sum(len(v) for v in cats.values())
     print(f"Loaded {total_sites} sites across {len(cats)} rate categories: "
