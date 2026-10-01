@@ -78,6 +78,12 @@ smaller template for one family. `hpc_templates/mopup_le200_array.slurm` +
 didn't finish within its time cap — every step skips work already done, so
 a mop-up run resumes rather than redoing anything.
 
+Running on a **different cluster** (different scheduler/partitions, or
+someone else's copy of the data)? See
+[docs/ADAPTING_TO_YOUR_CLUSTER.md](docs/ADAPTING_TO_YOUR_CLUSTER.md) —
+covers both a one-job-per-family approach and the chunked-batch approach
+above, plus sizing guidance for larger families.
+
 ### Combine results across families
 
 ```bash
