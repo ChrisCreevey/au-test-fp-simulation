@@ -19,11 +19,18 @@ which one a reader wants:
     else in this pipeline (see docs/METHODS.md), matching how Peter's real
     analysis presumably calls a rejection
 
+Also includes, per domain: every replicate's own delta-logL (not just the
+mean/min/max), for downstream comparison against the real delta-logL once
+available; and a real-vs-simulated %ID sanity check (skipped by default --
+pass --with-pctid to include it; it reads every alignment file and is by
+far the slowest part of this script once the dataset reaches thousands of
+families).
+
 Usage:
   python3 src/generate_failure_report.py --output-base data/sim_outputs_bulk \
       --manifest data/manifest/manifest_full.json \
       --out-tsv data/reports/failure_report.tsv \
-      [--email you@example.com]
+      [--email you@example.com] [--with-pctid]
 """
 import argparse
 import csv
@@ -105,6 +112,30 @@ def compute_mean_sim_pct_id(step3_dir):
     return sum(vals) / len(vals)
 
 
+def read_replicate_deltalogl(step5_dir):
+    """Per-replicate delta-logL values (unconstrained - constrained) from
+    step5_results.txt, ordered by replicate number (rep_001, rep_002, ...).
+    Returns a list, possibly shorter than N_REPLICATES if some replicates
+    were skipped -- missing ones are left as None, not silently dropped,
+    so position in the list always corresponds to that replicate number."""
+    path = Path(step5_dir) / "step5_results.txt"
+    if not path.is_file():
+        return []
+    values = {}
+    max_rep = 0
+    for line in open(path):
+        m = re.match(r'^RESULT rep_(\d+) .*?\bdeltalogl=([^\s]+)', line)
+        if not m:
+            continue
+        rep_num = int(m.group(1))
+        max_rep = max(max_rep, rep_num)
+        try:
+            values[rep_num] = float(m.group(2))
+        except ValueError:
+            values[rep_num] = None
+    return [values.get(i) for i in range(1, max_rep + 1)]
+
+
 def family_sort_key(fam):
     m = re.match(r'^F(\d+)$', fam)
     return int(m.group(1)) if m else fam
@@ -142,8 +173,23 @@ def load_manifest_info(manifest_path):
     return counts, trim_paths
 
 
-def build_table(families, expected_counts, trim_paths, output_base):
+def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=True):
     all_domain_nums = sorted({d for doms in families.values() for d in doms.keys()}, key=int)
+
+    # Max replicate count, from the N_Replicates column already loaded in
+    # memory (load_domain_results) -- no extra file reads needed. This is
+    # a safe upper bound on the actual replicate NUMBER ever seen in a
+    # step5_results.txt (N_REPLICATES controls how many get simulated in
+    # the first place), so columns never come up short even though
+    # N_Replicates itself counts usable (non-skipped) replicates, not the
+    # max rep number.
+    max_reps = 10
+    for doms in families.values():
+        for r in doms.values():
+            try:
+                max_reps = max(max_reps, int(r["N_Replicates"]))
+            except (KeyError, ValueError):
+                pass
 
     header = ["Family_ID", "N_Domains_Expected", "N_Domains_Completed"]
     for d in all_domain_nums:
@@ -155,6 +201,13 @@ def build_table(families, expected_counts, trim_paths, output_base):
             f"Domain{d}_Mean_Null_DeltaLogL", f"Domain{d}_Real_DeltaLogL",
             f"Domain{d}_Real_PctID", f"Domain{d}_Mean_Sim_PctID",
         ]
+        # Every replicate's own ΔlogL (unconstrained - constrained), not just
+        # the mean -- lets downstream analysis compare the real ΔlogL against
+        # this null DISTRIBUTION directly (e.g. a permutation p-value or any
+        # other summary stat), rather than only the mean/min/max already in
+        # Domain{d}_Mean_Null_DeltaLogL. NA for any replicate that was
+        # skipped or hasn't run yet.
+        header += [f"Domain{d}_DeltaLogL_Rep{i}" for i in range(1, max_reps + 1)]
 
     rows = []
     for fam in sorted(families.keys(), key=family_sort_key):
@@ -174,6 +227,8 @@ def build_table(families, expected_counts, trim_paths, output_base):
                             "Mean_AU_Pvalue", "Mean_Null_DeltaLogL", "Real_DeltaLogL",
                             "Real_PctID", "Mean_Sim_PctID"):
                     row[f"Domain{d}_{col}"] = "NA"
+                for i in range(1, max_reps + 1):
+                    row[f"Domain{d}_DeltaLogL_Rep{i}"] = "NA"
             else:
                 row[f"Domain{d}_N_Taxa"] = r["N_Taxa"]
                 row[f"Domain{d}_Alignment_Length"] = r["Alignment_Length"]
@@ -196,12 +251,26 @@ def build_table(families, expected_counts, trim_paths, output_base):
                 # simulated replicates have reached Step 3 so far -- a
                 # sanity check that the simulation is actually mimicking the
                 # real data's divergence, not just running without error.
-                trim_path = trim_paths.get((fam, d))
-                real_pid = compute_real_pct_id(trim_path)
-                step3_dir = output_base / fam / f"Domain{d}" / "step3"
-                sim_pid = compute_mean_sim_pct_id(step3_dir)
-                row[f"Domain{d}_Real_PctID"] = round(real_pid, 2) if real_pid is not None else "NA"
-                row[f"Domain{d}_Mean_Sim_PctID"] = round(sim_pid, 2) if sim_pid is not None else "NA"
+                # Reads full alignment files (real + up to N_REPLICATES
+                # simulated) per domain -- by far the slowest part of this
+                # script once the dataset reaches thousands of families;
+                # skipped by default, pass --with-pctid to include it.
+                if skip_pctid:
+                    row[f"Domain{d}_Real_PctID"] = "NA"
+                    row[f"Domain{d}_Mean_Sim_PctID"] = "NA"
+                else:
+                    trim_path = trim_paths.get((fam, d))
+                    real_pid = compute_real_pct_id(trim_path)
+                    step3_dir = output_base / fam / f"Domain{d}" / "step3"
+                    sim_pid = compute_mean_sim_pct_id(step3_dir)
+                    row[f"Domain{d}_Real_PctID"] = round(real_pid, 2) if real_pid is not None else "NA"
+                    row[f"Domain{d}_Mean_Sim_PctID"] = round(sim_pid, 2) if sim_pid is not None else "NA"
+
+                step5_dir = output_base / fam / f"Domain{d}" / "step5"
+                rep_vals = read_replicate_deltalogl(step5_dir)
+                for i in range(1, max_reps + 1):
+                    v = rep_vals[i - 1] if i <= len(rep_vals) else None
+                    row[f"Domain{d}_DeltaLogL_Rep{i}"] = v if v is not None else "NA"
         rows.append(row)
 
     return header, rows, all_domain_nums
@@ -252,6 +321,10 @@ def main():
     ap.add_argument("--manifest", default=None)
     ap.add_argument("--out-tsv", required=True)
     ap.add_argument("--email", default=None, help="If given, email the report to this address")
+    ap.add_argument("--with-pctid", action="store_true",
+                     help="Include the real-vs-simulated %%ID check (reads every alignment file; "
+                          "by far the slowest part once the dataset reaches thousands of families -- "
+                          "skipped by default)")
     args = ap.parse_args()
 
     output_base = Path(args.output_base)
@@ -262,7 +335,8 @@ def main():
         print(f"No domain results found yet under {output_base}", file=sys.stderr)
         sys.exit(1)
 
-    header, rows, all_domain_nums = build_table(families, expected_counts, trim_paths, output_base)
+    header, rows, all_domain_nums = build_table(families, expected_counts, trim_paths, output_base,
+                                                 skip_pctid=not args.with_pctid)
     stats = pooled_stats(families, all_domain_nums)
 
     out_path = Path(args.out_tsv)
