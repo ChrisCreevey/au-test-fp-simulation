@@ -116,8 +116,18 @@ process_one_replicate() {
     mkdir -p "$REP_OUTPUT_DIR"
     local REP_LOG="${REP_OUTPUT_DIR}/step4_rep.log"
 
+    # Skip-if-done must check for the FINAL .iqtree report, not .treefile --
+    # IQTree updates .treefile incrementally as it finds better trees during
+    # search, but only writes .iqtree on genuine completion. A run killed
+    # mid-search by a time limit leaves a .treefile (whatever intermediate
+    # tree it had reached) with no .iqtree; checking .treefile alone wrongly
+    # treats that truncated search as done on any later resubmission,
+    # silently locking in a non-converged tree (confirmed cause of ~160
+    # family-domains with NA taxa/alignment-length metadata and, in the
+    # worst cases, a degenerate always-zero delta-logL -- see project
+    # history / docs/METHODS.md).
     local UNCONSTRAINED="${REP_OUTPUT_DIR}/masked_unconstrained"
-    if [[ ! -f "${UNCONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
+    if [[ ! -f "${UNCONSTRAINED}.iqtree" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
             -s "$masked_aln" \
             -m "$MODEL" \
@@ -126,14 +136,14 @@ process_one_replicate() {
             --prefix "$UNCONSTRAINED" \
             > "$REP_LOG" 2>&1
 
-        if [[ ! -f "${UNCONSTRAINED}.treefile" ]]; then
+        if [[ ! -f "${UNCONSTRAINED}.iqtree" ]]; then
             echo "FAILED $rep_name unconstrained"
             return 1
         fi
     fi
 
     local CONSTRAINED="${REP_OUTPUT_DIR}/masked_constrained"
-    if [[ ! -f "${CONSTRAINED}.treefile" || "$FORCE_RERUN" == "true" ]]; then
+    if [[ ! -f "${CONSTRAINED}.iqtree" || "$FORCE_RERUN" == "true" ]]; then
         $IQTREE_BIN \
             -s "$masked_aln" \
             -te "$CONSTRAINED_TREE" \
@@ -143,7 +153,7 @@ process_one_replicate() {
             --prefix "$CONSTRAINED" \
             >> "$REP_LOG" 2>&1
 
-        if [[ ! -f "${CONSTRAINED}.treefile" ]]; then
+        if [[ ! -f "${CONSTRAINED}.iqtree" ]]; then
             echo "FAILED $rep_name constrained"
             return 1
         fi
