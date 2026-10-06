@@ -136,6 +136,37 @@ def read_replicate_deltalogl(step5_dir):
     return [values.get(i) for i in range(1, max_rep + 1)]
 
 
+def read_iqtree_treelen(iqtree_path):
+    """'Total tree length (sum of branch lengths)' from an .iqtree report.
+    Returns None if the file or line doesn't exist."""
+    if not Path(iqtree_path).is_file():
+        return None
+    for line in open(iqtree_path):
+        if "Total tree length (sum of branch lengths)" in line:
+            m = re.search(r'[-0-9.]+\s*$', line)
+            if m:
+                try:
+                    return float(m.group(0))
+                except ValueError:
+                    return None
+    return None
+
+
+def read_real_treelens(output_base, fam, domain):
+    """Real constrained/unconstrained tree lengths for one domain.
+    Constrained: Step 1's brlen_estimate.iqtree (fixed-topology fit on the
+    real constrained tree) -- available wherever Step 1 has run, independent
+    of this domain having a Peter tree. Unconstrained: the fixed-topology
+    evaluation of Peter's real tree (scripts/compute_real_unconstrained_logl.sh)
+    -- available only for domains with a matching Peter tree. Returns
+    (constrained_treelen, unconstrained_treelen), either possibly None."""
+    constrained = read_iqtree_treelen(
+        output_base / fam / f"Domain{domain}" / "step1" / "brlen_estimate.iqtree")
+    unconstrained = read_iqtree_treelen(
+        output_base / fam / f"Domain{domain}" / "real_data" / "real_unconstrained_logl.iqtree")
+    return constrained, unconstrained
+
+
 def family_sort_key(fam):
     m = re.match(r'^F(\d+)$', fam)
     return int(m.group(1)) if m else fam
@@ -195,6 +226,13 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
     for d in all_domain_nums:
         header += [
             f"Domain{d}_N_Taxa", f"Domain{d}_Alignment_Length", f"Domain{d}_N_Replicates",
+            # Real tree branch lengths (rate-of-evolution proxy), near the
+            # left alongside the other basic domain descriptors. Constrained:
+            # Step 1's fixed-topology fit on the real constrained tree
+            # (available wherever Step 1 has run). Unconstrained: the
+            # fixed-topology evaluation of Peter's real tree (available only
+            # for domains with a matching real tree -- NA otherwise).
+            f"Domain{d}_Real_Constrained_TreeLen", f"Domain{d}_Real_Unconstrained_TreeLen",
             f"Domain{d}_N_AU_Reject_Total", f"Domain{d}_Pct_AU_Reject_Total",
             f"Domain{d}_N_Significant_Violations", f"Domain{d}_Pct_Significant_Violations",
             f"Domain{d}_Mean_AU_Pvalue",
@@ -222,6 +260,7 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
             r = doms.get(d)
             if r is None:
                 for col in ("N_Taxa", "Alignment_Length", "N_Replicates",
+                            "Real_Constrained_TreeLen", "Real_Unconstrained_TreeLen",
                             "N_AU_Reject_Total", "Pct_AU_Reject_Total",
                             "N_Significant_Violations", "Pct_Significant_Violations",
                             "Mean_AU_Pvalue", "Mean_Null_DeltaLogL", "Real_DeltaLogL",
@@ -233,6 +272,11 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
                 row[f"Domain{d}_N_Taxa"] = r["N_Taxa"]
                 row[f"Domain{d}_Alignment_Length"] = r["Alignment_Length"]
                 row[f"Domain{d}_N_Replicates"] = r["N_Replicates"]
+
+                constrained_tl, unconstrained_tl = read_real_treelens(output_base, fam, d)
+                row[f"Domain{d}_Real_Constrained_TreeLen"] = constrained_tl if constrained_tl is not None else "NA"
+                row[f"Domain{d}_Real_Unconstrained_TreeLen"] = unconstrained_tl if unconstrained_tl is not None else "NA"
+
                 row[f"Domain{d}_N_AU_Reject_Total"] = r["N_AU_Rejects_Total"]
                 row[f"Domain{d}_Pct_AU_Reject_Total"] = r["Pct_AU_Rejects_Total"]
                 row[f"Domain{d}_N_Significant_Violations"] = r["N_Significant_Violations"]

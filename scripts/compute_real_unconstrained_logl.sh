@@ -50,5 +50,11 @@ if [[ -z "$LOGL" ]]; then
     exit 1
 fi
 
-echo "UNCONSTRAINED_LOGL=${LOGL}" > "$OUTPUT_FILE"
+TREELEN=$(grep -m1 "Total tree length (sum of branch lengths)" "${PREFIX}.iqtree" | grep -oP '[-0-9.]+$')
+TREELEN="${TREELEN:-NA}"
+
+{
+    echo "UNCONSTRAINED_LOGL=${LOGL}"
+    echo "UNCONSTRAINED_TREELEN=${TREELEN}"
+} > "$OUTPUT_FILE"
 echo "OK $OUTPUT_FILE"
