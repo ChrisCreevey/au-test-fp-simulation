@@ -167,6 +167,49 @@ def read_real_treelens(output_base, fam, domain):
     return constrained, unconstrained
 
 
+def read_iqtree_logl(iqtree_path):
+    """'Log-likelihood of the tree: <value> (s.e. ...)' from an .iqtree
+    report. Returns None if the file or line doesn't exist."""
+    if not Path(iqtree_path).is_file():
+        return None
+    for line in open(iqtree_path):
+        if "Log-likelihood of the tree" in line:
+            m = re.search(r'tree:\s*([-0-9.]+)', line)
+            if m:
+                try:
+                    return float(m.group(1))
+                except ValueError:
+                    return None
+    return None
+
+
+def read_real_logls(output_base, fam, domain):
+    """Real constrained/unconstrained log-likelihoods for one domain, and
+    their delta (unconstrained - constrained) -- the real-data equivalent
+    of the simulated replicates' delta-logL, for direct comparison against
+    Domain{d}_Mean_Null_DeltaLogL. Constrained: Step 1's brlen_estimate.iqtree.
+    Unconstrained: read straight out of real_unconstrained_logl.txt's
+    UNCONSTRAINED_LOGL= line (already a clean key=value, written by
+    scripts/compute_real_unconstrained_logl.sh -- no need to re-parse the
+    .iqtree report for this one). Returns (constrained_logl,
+    unconstrained_logl, delta_logl), any of which may be None."""
+    constrained = read_iqtree_logl(
+        output_base / fam / f"Domain{domain}" / "step1" / "brlen_estimate.iqtree")
+
+    unconstrained = None
+    txt_path = output_base / fam / f"Domain{domain}" / "real_data" / "real_unconstrained_logl.txt"
+    if txt_path.is_file():
+        for line in open(txt_path):
+            if line.startswith("UNCONSTRAINED_LOGL="):
+                try:
+                    unconstrained = float(line.strip().split("=", 1)[1])
+                except ValueError:
+                    pass
+
+    delta = (unconstrained - constrained) if (constrained is not None and unconstrained is not None) else None
+    return constrained, unconstrained, delta
+
+
 def family_sort_key(fam):
     m = re.match(r'^F(\d+)$', fam)
     return int(m.group(1)) if m else fam
@@ -233,6 +276,10 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
             # fixed-topology evaluation of Peter's real tree (available only
             # for domains with a matching real tree -- NA otherwise).
             f"Domain{d}_Real_Constrained_TreeLen", f"Domain{d}_Real_Unconstrained_TreeLen",
+            # Raw real log-likelihoods, same sources as the tree lengths
+            # above -- so Real_DeltaLogL below is verifiable from numbers
+            # visible in this same table, not just a black-box subtraction.
+            f"Domain{d}_Real_Constrained_LogL", f"Domain{d}_Real_Unconstrained_LogL",
             f"Domain{d}_N_AU_Reject_Total", f"Domain{d}_Pct_AU_Reject_Total",
             f"Domain{d}_N_Significant_Violations", f"Domain{d}_Pct_Significant_Violations",
             f"Domain{d}_Mean_AU_Pvalue",
@@ -261,6 +308,7 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
             if r is None:
                 for col in ("N_Taxa", "Alignment_Length", "N_Replicates",
                             "Real_Constrained_TreeLen", "Real_Unconstrained_TreeLen",
+                            "Real_Constrained_LogL", "Real_Unconstrained_LogL",
                             "N_AU_Reject_Total", "Pct_AU_Reject_Total",
                             "N_Significant_Violations", "Pct_Significant_Violations",
                             "Mean_AU_Pvalue", "Mean_Null_DeltaLogL", "Real_DeltaLogL",
@@ -277,6 +325,10 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
                 row[f"Domain{d}_Real_Constrained_TreeLen"] = constrained_tl if constrained_tl is not None else "NA"
                 row[f"Domain{d}_Real_Unconstrained_TreeLen"] = unconstrained_tl if unconstrained_tl is not None else "NA"
 
+                real_c_logl, real_u_logl, real_delta = read_real_logls(output_base, fam, d)
+                row[f"Domain{d}_Real_Constrained_LogL"] = real_c_logl if real_c_logl is not None else "NA"
+                row[f"Domain{d}_Real_Unconstrained_LogL"] = real_u_logl if real_u_logl is not None else "NA"
+
                 row[f"Domain{d}_N_AU_Reject_Total"] = r["N_AU_Rejects_Total"]
                 row[f"Domain{d}_Pct_AU_Reject_Total"] = r["Pct_AU_Rejects_Total"]
                 row[f"Domain{d}_N_Significant_Violations"] = r["N_Significant_Violations"]
@@ -284,12 +336,16 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
                 row[f"Domain{d}_Mean_AU_Pvalue"] = r["Mean_AU_Pvalue"]
                 # Mean of ALL replicates' delta-logL (unconstrained - constrained),
                 # recorded unconditionally in Step 5 regardless of AU reject/accept
-                # -- see docs/METHODS.md. Real_DeltaLogL is NA until a real-data
-                # comparison (real_data_delta_logl.sh, or Peter's real trees) has
-                # been run for this domain -- present now so it populates
-                # automatically once that's wired in, no report-format change needed.
+                # -- see docs/METHODS.md. Real_DeltaLogL is the REAL equivalent,
+                # computed above from Real_Constrained_LogL/Real_Unconstrained_LogL
+                # (the cheap real-tree calculation), not the old expensive
+                # real_data_delta_logl.sh pathway (never run in bulk, always NA) --
+                # this is the number to compare directly against
+                # Mean_Null_DeltaLogL, and the assumption this whole pipeline
+                # rests on: that matching alignment size/structure in simulation
+                # reproduces a delta-logL comparable to the real one.
                 row[f"Domain{d}_Mean_Null_DeltaLogL"] = r["Null_DeltaLogL_Mean"]
-                row[f"Domain{d}_Real_DeltaLogL"] = r["Real_DeltaLogL"]
+                row[f"Domain{d}_Real_DeltaLogL"] = real_delta if real_delta is not None else "NA"
 
                 # Pairwise %ID: real alignment vs. mean across whatever
                 # simulated replicates have reached Step 3 so far -- a
