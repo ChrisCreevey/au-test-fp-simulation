@@ -146,7 +146,14 @@ process_one_replicate_au() {
     local UNCONSTRAINED="${rep_dir}/masked_unconstrained.treefile"
     local CONSTRAINED="${rep_dir}/masked_constrained.treefile"
 
-    if [[ ! -f "$UNCONSTRAINED" ]] || [[ ! -f "$CONSTRAINED" ]]; then
+    # .treefile is written incrementally DURING a search, so it exists even
+    # for a truncated/killed mid-search run -- .iqtree is only written on
+    # genuine completion. Checking .treefile alone (as this used to do) let
+    # Step 5 silently run the AU test against a non-final, possibly
+    # non-converged tree -- the same bug class fixed in Step 4's skip-check
+    # (see 04_reconstruct_trees.sh), which this never got updated to match.
+    if [[ ! -f "$UNCONSTRAINED" ]] || [[ ! -f "$CONSTRAINED" ]] \
+        || [[ ! -f "${rep_dir}/masked_unconstrained.iqtree" ]] || [[ ! -f "${rep_dir}/masked_constrained.iqtree" ]]; then
         echo "SKIP $rep_name reason=missing_trees"
         return 0
     fi
@@ -225,19 +232,30 @@ process_one_replicate_au() {
             fi
         fi
 
-        # deltaL: logL difference from the best (unconstrained) tree in the
-        # comparison set -- field 3 of the same tree-1 row used above. This
-        # is the actual test-statistic magnitude, not just the threshold
-        # decision -- recorded so the null distribution of ΔlogL across
-        # replicates can be compared directly against the real data's
-        # observed ΔlogL (a permutation/parametric-bootstrap-style
-        # comparison), independent of the AU p-value's own significance call.
-        delta_logl=$(awk '/^[ \t]+1[ \t]+-[0-9]/ { print $3; exit }' "${AU_OUT}.iqtree" || echo "NA")
         constrained_logl=$(awk '/^[ \t]+1[ \t]+-[0-9]/ { print $2; exit }' "${AU_OUT}.iqtree" || echo "NA")
         unconstrained_logl=$(awk '/^[ \t]+2[ \t]+-[0-9]/ { print $2; exit }' "${AU_OUT}.iqtree" || echo "NA")
-        delta_logl="${delta_logl:-NA}"
         constrained_logl="${constrained_logl:-NA}"
         unconstrained_logl="${unconstrained_logl:-NA}"
+
+        # delta_logl = unconstrained - constrained, via direct subtraction
+        # of the two raw log-likelihoods above -- NOT field 3 of the tree-1
+        # row (IQTree's own "deltaL" column), which a previous version of
+        # this script used. That column is defined relative to whichever
+        # of the two compared trees has the HIGHER likelihood, and reads
+        # exactly 0 for that tree by definition -- so whenever the free
+        # (unconstrained) search did worse than the constrained tree (which
+        # happens: ML search isn't guaranteed to converge, especially on a
+        # simulated-noise replicate), the true negative ΔlogL was silently
+        # replaced with 0 instead of being recorded. Confirmed on a
+        # 600-family sample: ~0.65% of null replicates affected this way,
+        # worst case a -539 log-likelihood difference read as 0. Raw
+        # subtraction has no such floor and matches how the real-data
+        # equivalent (generate_failure_report.read_real_logls) is computed.
+        if [[ "$constrained_logl" != "NA" && "$unconstrained_logl" != "NA" ]]; then
+            delta_logl=$(echo "$unconstrained_logl - $constrained_logl" | bc -l)
+        else
+            delta_logl="NA"
+        fi
     fi
 
     # ====================================================================
