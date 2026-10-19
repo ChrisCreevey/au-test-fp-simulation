@@ -46,6 +46,12 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from pooled_null_z_test import (
+    is_degenerate_null, is_search_unreliable, leave_one_out_z, real_z_score,
+    empirical_p_upper, bh_qvalues,
+)
+from fisher_combined_test import fishers_combined
+
 DOMAIN_RESULTS_RE = re.compile(r'^(F\d+)/Domain(\d+)/step6/results\.tsv$')
 
 
@@ -158,13 +164,21 @@ def read_real_treelens(output_base, fam, domain):
     real constrained tree) -- available wherever Step 1 has run, independent
     of this domain having a Peter tree. Unconstrained: the fixed-topology
     evaluation of Peter's real tree (scripts/compute_real_unconstrained_logl.sh)
-    -- available only for domains with a matching Peter tree. Returns
-    (constrained_treelen, unconstrained_treelen), either possibly None."""
+    where available; for the domains with no matching Peter tree at all,
+    falls back to our OWN free-search tree (scripts/build_real_unconstrained_tree.sh,
+    real_data/built_unconstrained.iqtree) -- a different, self-built tree, not
+    necessarily the one Peter's own AU test used (see review_response.md
+    question A1). Returns (constrained_treelen, unconstrained_treelen,
+    used_self_built), the first two possibly None."""
     constrained = read_iqtree_treelen(
         output_base / fam / f"Domain{domain}" / "step1" / "brlen_estimate.iqtree")
-    unconstrained = read_iqtree_treelen(
-        output_base / fam / f"Domain{domain}" / "real_data" / "real_unconstrained_logl.iqtree")
-    return constrained, unconstrained
+    real_data_dir = output_base / fam / f"Domain{domain}" / "real_data"
+    unconstrained = read_iqtree_treelen(real_data_dir / "real_unconstrained_logl.iqtree")
+    used_self_built = False
+    if unconstrained is None:
+        unconstrained = read_iqtree_treelen(real_data_dir / "built_unconstrained.iqtree")
+        used_self_built = unconstrained is not None
+    return constrained, unconstrained, used_self_built
 
 
 def read_iqtree_logl(iqtree_path):
@@ -189,15 +203,21 @@ def read_real_logls(output_base, fam, domain):
     of the simulated replicates' delta-logL, for direct comparison against
     Domain{d}_Mean_Null_DeltaLogL. Constrained: Step 1's brlen_estimate.iqtree.
     Unconstrained: read straight out of real_unconstrained_logl.txt's
-    UNCONSTRAINED_LOGL= line (already a clean key=value, written by
-    scripts/compute_real_unconstrained_logl.sh -- no need to re-parse the
-    .iqtree report for this one). Returns (constrained_logl,
-    unconstrained_logl, delta_logl), any of which may be None."""
+    UNCONSTRAINED_LOGL= line (written by scripts/compute_real_unconstrained_logl.sh)
+    where Peter's own tree was available; for domains with no matching Peter
+    tree at all, falls back to our OWN free-search tree's
+    BUILT_UNCONSTRAINED_LOGL= line (real_data/built_unconstrained.txt, from
+    scripts/build_real_unconstrained_tree.sh) -- a different, self-built
+    tree, not necessarily the one Peter's own AU test used (see
+    review_response.md question A1). Returns (constrained_logl,
+    unconstrained_logl, delta_logl, used_self_built), the first three
+    possibly None."""
     constrained = read_iqtree_logl(
         output_base / fam / f"Domain{domain}" / "step1" / "brlen_estimate.iqtree")
 
+    real_data_dir = output_base / fam / f"Domain{domain}" / "real_data"
     unconstrained = None
-    txt_path = output_base / fam / f"Domain{domain}" / "real_data" / "real_unconstrained_logl.txt"
+    txt_path = real_data_dir / "real_unconstrained_logl.txt"
     if txt_path.is_file():
         for line in open(txt_path):
             if line.startswith("UNCONSTRAINED_LOGL="):
@@ -206,8 +226,20 @@ def read_real_logls(output_base, fam, domain):
                 except ValueError:
                     pass
 
+    used_self_built = False
+    if unconstrained is None:
+        built_txt_path = real_data_dir / "built_unconstrained.txt"
+        if built_txt_path.is_file():
+            for line in open(built_txt_path):
+                if line.startswith("BUILT_UNCONSTRAINED_LOGL="):
+                    try:
+                        unconstrained = float(line.strip().split("=", 1)[1])
+                        used_self_built = True
+                    except ValueError:
+                        pass
+
     delta = (unconstrained - constrained) if (constrained is not None and unconstrained is not None) else None
-    return constrained, unconstrained, delta
+    return constrained, unconstrained, delta, used_self_built
 
 
 def family_sort_key(fam):
@@ -293,6 +325,12 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
         # Domain{d}_Mean_Null_DeltaLogL. NA for any replicate that was
         # skipped or hasn't run yet.
         header += [f"Domain{d}_DeltaLogL_Rep{i}" for i in range(1, max_reps + 1)]
+        # Human-readable, re-derived-from-disk-every-run verification summary
+        # for this domain -- what's actually been confirmed complete, and
+        # what's known to be missing (not yet run, no real tree, replicates
+        # that never produced a usable result, excluded from the pooled-null
+        # test). See add_domain_notes() / finalize_notes().
+        header.append(f"Domain{d}_Notes")
 
     rows = []
     for fam in sorted(families.keys(), key=family_sort_key):
@@ -316,18 +354,31 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
                     row[f"Domain{d}_{col}"] = "NA"
                 for i in range(1, max_reps + 1):
                     row[f"Domain{d}_DeltaLogL_Rep{i}"] = "NA"
+
+                # Cheap (isdir only, no file stats/walks) check of how far
+                # this domain got, re-derived from disk every run -- not a
+                # live SLURM-state guess. A domain genuinely queued behind a
+                # large running job can sit at the same furthest step for
+                # days without being "stuck"; this reports the objective
+                # fact only, not an active/stalled judgement.
+                furthest = "not started"
+                for step in ("step1", "step2", "step3", "step4", "step5", "step6"):
+                    if (output_base / fam / f"Domain{d}" / step).is_dir():
+                        furthest = step
+                row[f"Domain{d}_Notes"] = f"Not yet complete (furthest step reached: {furthest})"
             else:
                 row[f"Domain{d}_N_Taxa"] = r["N_Taxa"]
                 row[f"Domain{d}_Alignment_Length"] = r["Alignment_Length"]
                 row[f"Domain{d}_N_Replicates"] = r["N_Replicates"]
 
-                constrained_tl, unconstrained_tl = read_real_treelens(output_base, fam, d)
+                constrained_tl, unconstrained_tl, tl_self_built = read_real_treelens(output_base, fam, d)
                 row[f"Domain{d}_Real_Constrained_TreeLen"] = constrained_tl if constrained_tl is not None else "NA"
                 row[f"Domain{d}_Real_Unconstrained_TreeLen"] = unconstrained_tl if unconstrained_tl is not None else "NA"
 
-                real_c_logl, real_u_logl, real_delta = read_real_logls(output_base, fam, d)
+                real_c_logl, real_u_logl, real_delta, logl_self_built = read_real_logls(output_base, fam, d)
                 row[f"Domain{d}_Real_Constrained_LogL"] = real_c_logl if real_c_logl is not None else "NA"
                 row[f"Domain{d}_Real_Unconstrained_LogL"] = real_u_logl if real_u_logl is not None else "NA"
+                used_self_built_tree = tl_self_built or logl_self_built
 
                 row[f"Domain{d}_N_AU_Reject_Total"] = r["N_AU_Rejects_Total"]
                 row[f"Domain{d}_Pct_AU_Reject_Total"] = r["Pct_AU_Rejects_Total"]
@@ -371,6 +422,62 @@ def build_table(families, expected_counts, trim_paths, output_base, skip_pctid=T
                 for i in range(1, max_reps + 1):
                     v = rep_vals[i - 1] if i <= len(rep_vals) else None
                     row[f"Domain{d}_DeltaLogL_Rep{i}"] = v if v is not None else "NA"
+
+                # Verification notes for a COMPLETED domain. Stored as a
+                # list under a temp key (not in `header`, deleted before
+                # writing) -- add_pooled_z_stats() appends one more flag
+                # (degenerate-null exclusion) once it's computed later, then
+                # finalize_notes() joins everything into the final string.
+                notes = []
+                if row[f"Domain{d}_Real_Unconstrained_LogL"] == "NA":
+                    notes.append("No real (Peter) tree available, and no self-built tree either")
+                elif used_self_built_tree:
+                    notes.append("Using self-built unconstrained tree (Peter's own tree unavailable) "
+                                 "-- not necessarily the same tree Peter's AU test used")
+
+                try:
+                    n_replicates = int(r["N_Replicates"])
+                    n_skipped = int(r.get("N_Skipped_Replicates", 0))
+                except (KeyError, ValueError):
+                    n_replicates, n_skipped = None, 0
+                total_attempted = (n_replicates + n_skipped) if n_replicates is not None else max_reps
+
+                n_na = sum(
+                    1 for i in range(1, total_attempted + 1)
+                    if row.get(f"Domain{d}_DeltaLogL_Rep{i}", "NA") == "NA"
+                )
+                if n_skipped > 0:
+                    notes.append(f"{n_skipped} replicate(s) skipped entirely "
+                                 f"(missing alignment/trees at Step4/5 input)")
+                extra_anomalies = n_na - n_skipped
+                if extra_anomalies > 0:
+                    notes.append(f"{extra_anomalies} replicate(s) produced a result but with "
+                                 f"no usable ΔlogL (see Step5 log)")
+
+                # Null-side search reliability: a NEGATIVE null ΔlogL means
+                # the free (unconstrained) search did WORSE than the
+                # constrained tree it was supposed to beat -- a search that
+                # can't even reliably outperform a reachable starting point
+                # signals too little phylogenetic information in this
+                # domain's taxa count/alignment length/tree length combo to
+                # trust ANY comparison built on it, independent of which way
+                # Pooled_Z/P/BH comes out. Threshold (>=50% of valid
+                # replicates negative) chosen from the dataset's own
+                # distribution: 0.9% of domains clear it, concentrated
+                # almost entirely in large-taxa/short-alignment combinations
+                # (e.g. 2000+ taxa, <150 sites) -- a real, systematic
+                # pattern, not noise. See docs/METHODS.md discussion.
+                null_vals = [row[f"Domain{d}_DeltaLogL_Rep{i}"] for i in range(1, total_attempted + 1)
+                             if row.get(f"Domain{d}_DeltaLogL_Rep{i}", "NA") != "NA"]
+                if null_vals and is_search_unreliable(null_vals):
+                    n_null_negative = sum(1 for v in null_vals if v < 0)
+                    notes.append(
+                        f"{n_null_negative}/{len(null_vals)} null replicates have a negative "
+                        f"ΔlogL (free search did worse than the constrained tree) -- "
+                        f"simulation search reliability questionable for this domain's "
+                        f"taxa count/alignment length/tree length; treat results with caution")
+
+                row[f"Domain{d}_Notes__list"] = notes
         rows.append(row)
 
     return header, rows, all_domain_nums
@@ -397,6 +504,120 @@ def pooled_stats(families, all_domain_nums):
             "pct_significant": round(100.0 * n_sig / n_reps, 2) if n_reps else None,
         }
     return stats
+
+
+def add_pooled_z_stats(header, rows, all_domain_nums):
+    """Adds, per domain, Pooled_Z / Pooled_P / Pooled_P_BH columns -- the
+    higher-resolution alternative to the raw per-family rank test, from
+    src/pooled_null_z_test.py. Standardizes each family's real delta-logL
+    and null replicates using that family's own 10 replicates, pools the
+    *null-side* standardized values (leave-one-out) across every family
+    in this report into one empirical reference per domain, then compares
+    each family's real z-score against that pooled reference. Families
+    with numerically degenerate null variance (near-zero sd) are
+    excluded, detected from their own null-vs-null z's only -- never from
+    the real value, which can legitimately be enormous without the null
+    being degenerate. See docs/METHODS.md / pvalue_methods.md for the
+    full derivation. Mutates rows in place; returns the updated header
+    (new columns inserted right after each domain's Real_DeltaLogL) and a
+    per-domain stats dict for the summary email."""
+    domain_stats = {}
+
+    for d in all_domain_nums:
+        rep_pattern = re.compile(rf'^Domain{d}_DeltaLogL_Rep\d+$')
+        candidates = []
+        for row in rows:
+            real_raw = row.get(f"Domain{d}_Real_DeltaLogL", "NA")
+            if real_raw == "NA":
+                continue
+            null_deltas = [float(v) for k, v in row.items()
+                           if rep_pattern.match(k) and v != "NA"]
+            if len(null_deltas) < 3:
+                continue
+            candidates.append((row, float(real_raw), null_deltas))
+
+        pooled_null_z = []
+        real_z_rows = []  # (row, z, is_unreliable)
+        n_degenerate = 0
+        for row, real_delta, null_deltas in candidates:
+            if is_degenerate_null(null_deltas):
+                n_degenerate += 1
+                row.setdefault(f"Domain{d}_Notes__list", []).append(
+                    "Excluded from pooled-null test: degenerate null variance "
+                    "(own simulated replicates are numerically ~identical)")
+                continue
+            pooled_null_z.extend(leave_one_out_z(null_deltas))
+            rz = real_z_score(real_delta, null_deltas)
+            if rz is not None:
+                real_z_rows.append((row, rz, is_search_unreliable(null_deltas)))
+
+        p_vals = [empirical_p_upper(z, pooled_null_z) for _, z, _ in real_z_rows]
+        q_vals = bh_qvalues(p_vals)
+
+        for (row, z, _), p, q in zip(real_z_rows, p_vals, q_vals):
+            row[f"Domain{d}_Pooled_Z"] = round(z, 4)
+            row[f"Domain{d}_Pooled_P"] = p
+            row[f"Domain{d}_Pooled_P_BH"] = round(q, 6)
+
+        for row in rows:
+            row.setdefault(f"Domain{d}_Pooled_Z", "NA")
+            row.setdefault(f"Domain{d}_Pooled_P", "NA")
+            row.setdefault(f"Domain{d}_Pooled_P_BH", "NA")
+
+        # Reliability split: the Pooled_Z/P/BH columns above are unchanged
+        # (same single pool, same global BH ranking, as before) -- this is
+        # an additional breakdown layered on top, grouping the ALREADY-
+        # computed q-values by whether each family's own null search was
+        # reliable (see is_search_unreliable -- >=50% of its null
+        # replicates failed to beat the constrained tree). Reliable
+        # families are the ones a real-vs-null comparison can actually be
+        # trusted for; unreliable ones are reported separately rather than
+        # silently mixed into the same headline number.
+        reliable_q = [q for (_, _, unreliable), q in zip(real_z_rows, q_vals) if not unreliable]
+        unreliable_q = [q for (_, _, unreliable), q in zip(real_z_rows, q_vals) if unreliable]
+        reliable_p = [p for (_, _, unreliable), p in zip(real_z_rows, p_vals) if not unreliable]
+        unreliable_p = [p for (_, _, unreliable), p in zip(real_z_rows, p_vals) if unreliable]
+
+        fisher_reliable = fishers_combined(reliable_p)
+        fisher_unreliable = fishers_combined(unreliable_p)
+
+        n_bh_sig = sum(1 for q in q_vals if q <= 0.05)
+        domain_stats[d] = {
+            "n_tested": len(real_z_rows),
+            "n_degenerate_excluded": n_degenerate,
+            "n_pooled_null": len(pooled_null_z),
+            "n_bh_sig_05": n_bh_sig,
+            "n_reliable": len(reliable_q),
+            "n_bh_sig_05_reliable": sum(1 for q in reliable_q if q <= 0.05),
+            "fisher_reliable": fisher_reliable,
+            "n_unreliable": len(unreliable_q),
+            "n_bh_sig_05_unreliable": sum(1 for q in unreliable_q if q <= 0.05),
+            "fisher_unreliable": fisher_unreliable,
+        }
+
+    new_header = []
+    for col in header:
+        new_header.append(col)
+        m = re.match(r'^Domain(\d+)_Real_DeltaLogL$', col)
+        if m:
+            d = m.group(1)
+            new_header += [f"Domain{d}_Pooled_Z", f"Domain{d}_Pooled_P", f"Domain{d}_Pooled_P_BH"]
+
+    return new_header, domain_stats
+
+
+def finalize_notes(rows, all_domain_nums):
+    """Joins each domain's Domain{d}_Notes__list (built across build_table
+    and add_pooled_z_stats) into the final Domain{d}_Notes string, and
+    removes the temp list key so it never reaches the CSV writer. A
+    completed domain with an empty list -- nothing flagged by any of the
+    checks above -- is explicitly confirmed, not just silently blank."""
+    for row in rows:
+        for d in all_domain_nums:
+            key = f"Domain{d}_Notes__list"
+            if key in row:
+                notes = row.pop(key)
+                row[f"Domain{d}_Notes"] = "; ".join(notes) if notes else "Verified complete"
 
 
 def send_email(to_addr, subject, body, attachment_path):
@@ -438,6 +659,8 @@ def main():
     header, rows, all_domain_nums = build_table(families, expected_counts, trim_paths, output_base,
                                                  skip_pctid=not args.with_pctid)
     stats = pooled_stats(families, all_domain_nums)
+    header, pooled_z_stats = add_pooled_z_stats(header, rows, all_domain_nums)
+    finalize_notes(rows, all_domain_nums)
 
     out_path = Path(args.out_tsv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -471,6 +694,54 @@ def main():
         summary_lines.append(
             f"  Domain{d}: {s['n_significant']} / {s['n_replicates']} replicates "
             f"({pct}) across {s['n_families']} families"
+        )
+
+    summary_lines += [
+        "",
+        "Pooled-null z-score test (real delta-logL standardized per family,",
+        "compared against a pooled, cross-family null reference -- see",
+        "pvalue_methods.md for the full method). BH = Benjamini-Hochberg",
+        "FDR-adjusted p-value (q-value), the appropriate multiple-testing",
+        "correction here (Bonferroni is far too strict given how many",
+        "families are tested at once):",
+        "",
+    ]
+    for d in all_domain_nums:
+        s = pooled_z_stats[d]
+        pct_bh = f"{100*s['n_bh_sig_05']/s['n_tested']:.1f}%" if s['n_tested'] else "NA"
+        summary_lines.append(
+            f"  Domain{d}: {s['n_tested']} families tested (pooled null size={s['n_pooled_null']}, "
+            f"{s['n_degenerate_excluded']} excluded as numerically degenerate); "
+            f"significant at BH-FDR<=0.05: {s['n_bh_sig_05']}/{s['n_tested']} ({pct_bh})"
+        )
+
+    summary_lines += [
+        "",
+        "Same test, split by simulation reliability (>=50% of a family's own",
+        "null replicates failing to beat the constrained tree means that",
+        "family's null -- and so any comparison built on it -- shouldn't be",
+        "trusted, regardless of which way it comes out; see each domain's",
+        "Notes column). RELIABLE is the number to use for \"is 41% surprising\";",
+        "UNRELIABLE is reported separately, not folded into that headline:",
+        "",
+    ]
+    for d in all_domain_nums:
+        s = pooled_z_stats[d]
+        pct_rel = f"{100*s['n_bh_sig_05_reliable']/s['n_reliable']:.1f}%" if s['n_reliable'] else "NA"
+        pct_unrel = f"{100*s['n_bh_sig_05_unreliable']/s['n_unreliable']:.1f}%" if s['n_unreliable'] else "NA"
+        _, log10_p_rel, k_rel = s['fisher_reliable']
+        _, log10_p_unrel, k_unrel = s['fisher_unreliable']
+        fisher_rel_str = f"log10(p)={log10_p_rel:.1f}" if log10_p_rel is not None else "NA"
+        fisher_unrel_str = f"log10(p)={log10_p_unrel:.1f}" if log10_p_unrel is not None else "NA"
+        summary_lines.append(
+            f"  Domain{d} RELIABLE:   {s['n_reliable']} families; "
+            f"BH-FDR<=0.05: {s['n_bh_sig_05_reliable']}/{s['n_reliable']} ({pct_rel}); "
+            f"Fisher's combined {fisher_rel_str} (k={k_rel})"
+        )
+        summary_lines.append(
+            f"  Domain{d} UNRELIABLE: {s['n_unreliable']} families; "
+            f"BH-FDR<=0.05: {s['n_bh_sig_05_unreliable']}/{s['n_unreliable']} ({pct_unrel}); "
+            f"Fisher's combined {fisher_unrel_str} (k={k_unrel})"
         )
 
     summary_lines += [
